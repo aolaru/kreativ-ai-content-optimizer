@@ -1,0 +1,42 @@
+# KREATIV AI Content Optimizer
+
+This build combines draft generation for new commercial font posts with the existing optimization workflows for older posts.
+
+## Included modules
+- `Generator`
+- `Audit & Queue`
+- `Suggestions`
+- `Categories`
+- `Tags`
+- `Settings`
+
+## Generator
+- accepts one or more marketplace URLs
+- uses the plugin's existing OpenAI settings
+- generates draft previews for:
+  - title
+  - image URL
+  - designer
+  - foundry
+  - font style
+  - tags
+  - post content
+- creates WordPress draft posts only after review
+- assigns the generated post into the `Fonts / Designer / Foundry / Font Style` category structure when those parent categories exist
+- attempts to sideload the preview image and set it as featured image
+
+## Editorial rewrite and optimization
+- stronger editorial AI prompt for old font posts
+- anti-filler writing guide
+- structured output for:
+  - title
+  - intro
+  - visual analysis
+  - specific use cases
+  - pairing notes
+  - verified details
+- improved content template for stronger font-review style rewrites
+
+## Notes
+- The generator uses best-effort inference from the supplied URL, so every preview should be reviewed before creating drafts.
+- This merged build reuses the optimizer's OpenAI settings. The old descriptor plugin's separate API settings are no longer needed if you move to this version.

@@ -1,0 +1,1390 @@
+<?php
+
+trait KACO_AI_Generator_Trait {
+    private function generate_ai_for_row($row) {
+        $post_id = (int) $row['post_id'];
+        $post = get_post($post_id);
+        if (!$post) {
+            return false;
+        }
+
+        $audit = json_decode($row['audit_data'], true);
+        $suggestion = json_decode($row['suggestion_data'], true);
+        if (!is_array($suggestion)) {
+            $suggestion = array();
+        }
+
+        $ai = $this->request_ai_suggestion($post, is_array($audit) ? $audit : array());
+        if (!$ai) {
+            return false;
+        }
+
+        $suggestion['ai'] = $ai;
+        $suggestion['ai_generated_at'] = gmdate('Y-m-d H:i:s');
+
+        $this->update_suggestion_payload((int) $row['id'], $suggestion);
+        $this->update_suggestion_status((int) $row['id'], $this->passes_ai_confidence($ai) ? 'pending' : 'needs_review', get_current_user_id());
+        return true;
+    }
+
+    private function request_ai_suggestion($post, $audit) {
+        $api_key = (string) get_option('kaco_openai_api_key', '');
+        $endpoint = (string) get_option('kaco_openai_endpoint', self::OPENAI_ENDPOINT);
+        $model = (string) get_option('kaco_openai_model', self::OPENAI_MODEL);
+        $editorial_style_guide = (string) get_option('kaco_editorial_style_guide', '');
+
+        if ($api_key === '' || $endpoint === '' || $model === '') {
+            return false;
+        }
+
+        $system_prompt = 'You are an SEO content optimizer for a font marketplace. Return valid minified JSON only. No markdown. Preserve factual safety.';
+        $user_prompt = wp_json_encode(array(
+            'task' => 'Create safe suggested improvements for a WordPress font post.',
+            'output_schema' => array(
+                'title' => 'string in format: Font Name - four word descriptor',
+                'refreshed_intro' => 'string',
+                'visual_analysis' => 'string',
+                'best_for' => array('3 to 5 specific use cases'),
+                'pairing_notes' => array('2 to 4 specific pairing recommendations'),
+                'font_features' => array('verified feature bullets only'),
+                'whats_included' => array('verified included items only'),
+                'pricing_details' => array('verified pricing bullets only'),
+                'verified_details' => array('verified fact bullets only from supplied content'),
+                'content_append' => 'string',
+                'excerpt' => 'string',
+                'term_descriptions' => array(
+                    'category' => array(
+                        array(
+                            'term' => 'string',
+                            'description' => 'string',
+                        ),
+                    ),
+                ),
+                'font_category_hierarchy' => array(
+                    'designer_names' => array('1 or more designer names'),
+                    'foundry_name' => 'string',
+                    'font_style_name' => 'one of the fixed font styles only',
+                    'font_mood_names' => array('1 or more fixed font moods'),
+                    'font_use_case_names' => array('1 or more fixed font use cases'),
+                    'notes' => 'string',
+                ),
+                'evidence' => array(
+                    'designer' => 'string',
+                    'foundry' => 'string',
+                    'font_style' => 'string',
+                    'font_mood' => 'string',
+                    'font_use_case' => 'string',
+                ),
+                'internal_links' => array(
+                    array(
+                        'url' => 'string',
+                        'anchor' => 'string',
+                        'reason' => 'string',
+                    ),
+                ),
+                'confidence' => 'number 0..1',
+                'notes' => 'string',
+            ),
+            'post' => array(
+                'id' => (int) $post->ID,
+                'title' => (string) $post->post_title,
+                'excerpt' => (string) $post->post_excerpt,
+                'content' => substr((string) $post->post_content, 0, 8000),
+                'url' => get_permalink((int) $post->ID),
+            ),
+            'audit' => $audit,
+            'category_gaps' => !empty($audit['category_desc_gaps']) ? $audit['category_desc_gaps'] : array(),
+            'duplicate_candidates' => !empty($audit['duplicate_candidates']) ? $audit['duplicate_candidates'] : array(),
+            'font_category_targets' => $this->font_category_parent_targets(),
+            'fixed_font_styles' => $this->fixed_font_styles(),
+            'fixed_font_moods' => $this->fixed_font_moods(),
+            'fixed_font_use_cases' => $this->fixed_font_use_cases(),
+            'font_category_hierarchy' => !empty($audit['font_category_hierarchy']) ? $audit['font_category_hierarchy'] : array(),
+            'latest_related_links' => $this->suggest_related_links((int) $post->ID),
+            'editorial_style_guide' => $editorial_style_guide,
+            'constraints' => array(
+                'no_html_script',
+                'no_keyword_stuffing',
+                'add_internal_links_that_are_relevant_only',
+                'tone_clear_and_commercial_but_not_hype',
+                'intro_must_be_2_to_4_sentences',
+                'category_descriptions_must_be_original_and_specific',
+                'for_fonts_posts_extract_designers_foundry_font_style_if_confident',
+                'for_fonts_posts_propose_child_categories_under_designer_foundry_font_style',
+                'font_name_must_match_the_existing_post_title_font_name',
+                'if_designer_or_foundry_is_uncertain_leave_it_blank_do_not_guess',
+                'font_style_name_must_be_exactly_one_of_the_fixed_font_styles',
+                'infer_font_style_from_description_and_post_presentation_when_possible',
+                'font_mood_names_must_be_one_or_more_items_from_the_fixed_font_moods',
+                'infer_one_or_more_font_moods_from_description_and_post_presentation_when_possible',
+                'font_use_case_names_must_be_one_or_more_items_from_the_fixed_font_use_cases',
+                'infer_one_or_more_font_use_cases_from_description_and_post_presentation_when_possible',
+                'if_title_is_regenerated_keep_original_font_name_and_add_exactly_four_descriptive_words_after_dash',
+                'avoid_generic_marketing_filler',
+                'use_at_least_two_concrete_visual_observations',
+                'best_for_must_be_specific_not_generic',
+                'pairing_notes_must_recommend_contrasting_or_supporting_font_directions_and_explain_why_each_match_works',
+                'font_features_whats_included_and_pricing_must_only_use_explicitly_supported_facts',
+                'verified_details_must_only_use_explicitly_supported_facts',
+            ),
+        ));
+
+        $body = array(
+            'model' => $model,
+            'response_format' => array('type' => 'json_object'),
+            'temperature' => 0.2,
+            'messages' => array(
+                array('role' => 'system', 'content' => $system_prompt),
+                array('role' => 'user', 'content' => $user_prompt),
+            ),
+        );
+
+        $response = wp_remote_post($endpoint, array(
+            'timeout' => 60,
+            'headers' => array(
+                'Authorization' => 'Bearer ' . $api_key,
+                'Content-Type' => 'application/json',
+            ),
+            'body' => wp_json_encode($body),
+        ));
+
+        if (is_wp_error($response)) {
+            return false;
+        }
+
+        $code = (int) wp_remote_retrieve_response_code($response);
+        $raw = (string) wp_remote_retrieve_body($response);
+        if ($code < 200 || $code >= 300 || $raw === '') {
+            return false;
+        }
+
+        $json = json_decode($raw, true);
+        $content = '';
+
+        if (!empty($json['choices'][0]['message']['content'])) {
+            $content = (string) $json['choices'][0]['message']['content'];
+        }
+
+        if ($content === '') {
+            return false;
+        }
+
+        $decoded = json_decode($content, true);
+        if (!is_array($decoded)) {
+            return false;
+        }
+
+        return $this->sanitize_ai_payload($decoded);
+    }
+
+    public function handle_generate_font_previews() {
+        $this->require_admin_request();
+
+        $raw_urls = (string) wp_unslash($_POST['kaco_generator_urls'] ?? '');
+        $urls = preg_split('/\r\n|\r|\n/', $raw_urls);
+        $urls = array_values(array_filter(array_map('trim', (array) $urls)));
+
+        if (empty($urls)) {
+            $this->redirect_with_notice('No marketplace URLs were provided.', 'generator');
+        }
+
+        $previews = array();
+        foreach ($urls as $url) {
+            $preview = $this->request_generator_preview($url);
+            if (!$preview) {
+                $previews[] = array(
+                    'url' => esc_url_raw($url),
+                    'title' => '',
+                    'image_url' => '',
+                    'designer_names' => array(),
+                    'foundry_name' => '',
+                    'font_style_name' => '',
+                    'font_mood_names' => array(),
+                    'font_use_case_names' => array(),
+                    'tags' => array(),
+                    'content' => '<p>Generation failed for this URL. Check the OpenAI settings or edit this draft manually.</p>',
+                );
+                continue;
+            }
+            $previews[] = $preview;
+        }
+
+        $this->set_generator_previews($previews);
+        $this->redirect_with_notice(count($previews) . ' preview(s) generated.', 'generator');
+    }
+
+    public function handle_create_generated_drafts() {
+        $this->require_admin_request();
+
+        $previews = !empty($_POST['previews']) && is_array($_POST['previews']) ? (array) wp_unslash($_POST['previews']) : array();
+        if (empty($previews)) {
+            $this->redirect_with_notice('No previews were submitted.', 'generator');
+        }
+
+        $created = 0;
+        $skipped = 0;
+        foreach ($previews as $preview) {
+            if (empty($preview['create'])) {
+                continue;
+            }
+
+            $post_id = $this->create_generated_draft_from_preview($preview);
+            if ($post_id > 0) {
+                $created++;
+            } else {
+                $skipped++;
+            }
+        }
+
+        $this->set_generator_previews(array());
+        $notice = $created . ' draft(s) created.';
+        if ($skipped > 0) {
+            $notice .= ' ' . $skipped . ' preview(s) skipped, usually because the source URL already exists or required content was missing.';
+        }
+        $this->redirect_with_notice($notice, 'generator');
+    }
+
+    private function request_generator_preview($url) {
+        $api_key = (string) get_option('kaco_openai_api_key', '');
+        $endpoint = (string) get_option('kaco_openai_endpoint', self::OPENAI_ENDPOINT);
+        $model = (string) get_option('kaco_openai_model', self::OPENAI_MODEL);
+        $editorial_style_guide = (string) get_option('kaco_editorial_style_guide', '');
+
+        $url = esc_url_raw((string) $url);
+        if ($api_key === '' || $endpoint === '' || $model === '' || $url === '') {
+            return false;
+        }
+
+        $targets = $this->font_category_parent_targets();
+        $font_name_hint = $this->infer_font_name_from_source_url($url);
+        $foundry_hint = $this->infer_foundry_name_from_source_url($url);
+        $source_context = $this->fetch_source_context($url);
+        $source_entity_hints = $this->extract_source_entity_hints($source_context, $font_name_hint, $foundry_hint);
+        $system_prompt = 'You generate structured draft proposals for commercial font review posts. Return valid minified JSON only. No markdown code fences. Do not invent technical features that are not clearly supported.';
+        $user_prompt = wp_json_encode(array(
+            'task' => 'Generate a draft-ready font post proposal from a marketplace URL.',
+            'source_url' => $url,
+            'source_hints' => array(
+                'font_name_hint' => $font_name_hint,
+                'foundry_hint' => $foundry_hint,
+                'designer_hints' => $source_entity_hints['designer_names'],
+                'foundry_context_hint' => $source_entity_hints['foundry_name'],
+            ),
+            'source_context' => $source_context,
+            'output_schema' => array(
+                'title' => 'string',
+                'image_url' => 'string',
+                'designer_names' => array('1 or more designer names'),
+                'foundry_name' => 'string',
+                'font_style_name' => 'one of the fixed font styles only',
+                'font_mood_names' => array('1 or more fixed font moods'),
+                'font_use_case_names' => array('1 or more fixed font use cases'),
+                'tags' => array('5 to 10 specific tag strings'),
+                'refreshed_intro' => 'string',
+                'visual_analysis' => 'string',
+                'best_for' => array('3 to 5 specific use cases'),
+                'pairing_notes' => array('2 to 4 specific pairing recommendations'),
+                'font_features' => array('verified feature bullets only'),
+                'whats_included' => array('verified included items only'),
+                'pricing_details' => array('verified pricing bullets only'),
+                'verified_details' => array('verified fact bullets only'),
+                'evidence' => array(
+                    'designer' => 'string',
+                    'foundry' => 'string',
+                    'font_style' => 'string',
+                    'font_mood' => 'string',
+                    'font_use_case' => 'string',
+                ),
+                'confidence' => 'number 0..1',
+            ),
+            'required_sections' => array(
+                '2 to 4 sentence intro',
+                'visual analysis paragraph',
+                'specific best-for items',
+                'pairing notes paragraph',
+                'verified details list',
+            ),
+            'house_rules' => array(
+                'keep the marketplace purchase link in the CTA and first mention',
+                'write like an editorial font reviewer, not a generic marketplace summary',
+                'avoid filler phrases like versatile, unique touch, reliable choice, and suitable for various projects',
+                'use at least two concrete visual observations',
+                'best use cases must be specific to the font style',
+                'use source_context and source_hints as primary evidence, do not infer entities from brand names loosely',
+                'do not swap font name and foundry name',
+                'pairing notes must recommend 2 to 4 contrasting or supporting font directions and explain why each pairing works',
+                'title_and_cta_must_use_the_font_name_hint_if_it_is_present',
+                'if_designer_or_foundry_is_uncertain_leave_it_blank_do_not_guess',
+                'font_features_whats_included_and_pricing_must_only_use_explicitly_supported_facts',
+                'verified details must only include facts that are likely explicit on the source page',
+                'do not claim free download availability',
+                'title should be in format Font Name - four word descriptor when possible',
+            ),
+            'category_targets' => $targets,
+            'fixed_font_styles' => $this->fixed_font_styles(),
+            'fixed_font_moods' => $this->fixed_font_moods(),
+            'fixed_font_use_cases' => $this->fixed_font_use_cases(),
+            'editorial_style_guide' => $editorial_style_guide,
+        ));
+
+        $body = array(
+            'model' => $model,
+            'response_format' => array('type' => 'json_object'),
+            'temperature' => 0.2,
+            'messages' => array(
+                array('role' => 'system', 'content' => $system_prompt),
+                array('role' => 'user', 'content' => $user_prompt),
+            ),
+        );
+
+        $response = wp_remote_post($endpoint, array(
+            'timeout' => 60,
+            'headers' => array(
+                'Authorization' => 'Bearer ' . $api_key,
+                'Content-Type' => 'application/json',
+            ),
+            'body' => wp_json_encode($body),
+        ));
+
+        if (is_wp_error($response)) {
+            return false;
+        }
+
+        $code = (int) wp_remote_retrieve_response_code($response);
+        $raw = (string) wp_remote_retrieve_body($response);
+        if ($code < 200 || $code >= 300 || $raw === '') {
+            return false;
+        }
+
+        $json = json_decode($raw, true);
+        $content = !empty($json['choices'][0]['message']['content']) ? (string) $json['choices'][0]['message']['content'] : '';
+        if ($content === '') {
+            return false;
+        }
+
+        $decoded = json_decode($content, true);
+        if (!is_array($decoded)) {
+            return false;
+        }
+
+        return $this->sanitize_generator_preview($decoded, $url);
+    }
+
+    private function sanitize_generator_preview($payload, $url) {
+        $tags = array();
+        if (!empty($payload['tags']) && is_array($payload['tags'])) {
+            foreach ($payload['tags'] as $tag) {
+                $tag = sanitize_text_field((string) $tag);
+                if ($tag !== '') {
+                    $tags[] = $tag;
+                }
+            }
+        }
+
+        $best_for = array();
+        if (!empty($payload['best_for']) && is_array($payload['best_for'])) {
+            foreach ($payload['best_for'] as $item) {
+                $item = sanitize_text_field((string) $item);
+                if ($item !== '') {
+                    $best_for[] = $item;
+                }
+            }
+        }
+
+        $verified_details = array();
+        if (!empty($payload['verified_details']) && is_array($payload['verified_details'])) {
+            foreach ($payload['verified_details'] as $item) {
+                $item = sanitize_text_field((string) $item);
+                if ($item !== '') {
+                    $verified_details[] = $item;
+                }
+            }
+        }
+
+        $pairing_notes = $this->sanitize_pairing_notes($payload['pairing_notes'] ?? array());
+        $font_features = $this->sanitize_simple_bullets($payload['font_features'] ?? array(), 8);
+        $whats_included = $this->sanitize_simple_bullets($payload['whats_included'] ?? array(), 8);
+        $pricing_details = $this->sanitize_simple_bullets($payload['pricing_details'] ?? array(), 5);
+
+        $font_name_hint = $this->infer_font_name_from_source_url($url);
+        $foundry_hint = $this->infer_foundry_name_from_source_url($url);
+        $source_context = $this->fetch_source_context($url);
+        $source_entity_hints = $this->extract_source_entity_hints($source_context, $font_name_hint, $foundry_hint);
+        $title = $this->sanitize_generated_title((string) ($payload['title'] ?? ''), $font_name_hint);
+        $font_name = $font_name_hint !== '' ? $font_name_hint : $this->extract_font_name_from_title($title);
+        if ($font_name === '') {
+            $font_name = $title;
+        }
+
+        $ai_designer_names = $this->sanitize_name_list($payload['designer_names'] ?? ($payload['designer_name'] ?? array()));
+        $designer_resolution = $this->resolve_designer_names(
+            $ai_designer_names,
+            $source_entity_hints,
+            (array) ($payload['evidence'] ?? array())
+        );
+        $designer_names = $designer_resolution['designer_names'];
+        $foundry_name = sanitize_text_field((string) ($payload['foundry_name'] ?? ''));
+        if ($foundry_name === '' && !empty($source_entity_hints['foundry_name'])) {
+            $foundry_name = sanitize_text_field((string) $source_entity_hints['foundry_name']);
+        }
+        if ($foundry_name === '' && $foundry_hint !== '') {
+            $foundry_name = $foundry_hint;
+        }
+        if ($foundry_name !== '' && $font_name !== '' && strcasecmp($foundry_name, $font_name) === 0 && $foundry_hint !== '' && strcasecmp($foundry_hint, $font_name) !== 0) {
+            $foundry_name = $foundry_hint;
+        }
+        $font_mood_names = $this->sanitize_canonical_name_list($payload['font_mood_names'] ?? ($payload['font_mood_name'] ?? array()), 'canonical_font_mood_name');
+        $font_use_case_names = $this->sanitize_canonical_name_list($payload['font_use_case_names'] ?? ($payload['font_use_case_name'] ?? array()), 'canonical_font_use_case_name');
+
+        $designer_evidence = $designer_resolution['evidence'];
+        if ($designer_evidence === '' && !empty($payload['evidence']['designer'])) {
+            $designer_evidence = sanitize_text_field((string) $payload['evidence']['designer']);
+        }
+        $confidence = max(0, min(1, (float) ($payload['confidence'] ?? 0)));
+        if ($designer_resolution['confidence'] < 0.75) {
+            $confidence = min($confidence, max(0.35, $designer_resolution['confidence']));
+        }
+
+        return array(
+            'url' => esc_url_raw($url),
+            'title' => $title,
+            'image_url' => esc_url_raw((string) ($payload['image_url'] ?? '')),
+            'designer_names' => $designer_names,
+            'foundry_name' => $foundry_name,
+            'font_style_name' => $this->canonical_font_style_name((string) ($payload['font_style_name'] ?? '')),
+            'font_mood_names' => $font_mood_names,
+            'font_use_case_names' => $font_use_case_names,
+            'tags' => array_slice(array_values(array_unique($tags)), 0, 12),
+            'refreshed_intro' => wp_kses_post((string) ($payload['refreshed_intro'] ?? '')),
+            'visual_analysis' => wp_kses_post((string) ($payload['visual_analysis'] ?? '')),
+            'best_for' => array_slice(array_values(array_unique($best_for)), 0, 5),
+            'pairing_notes' => $pairing_notes,
+            'font_features' => $font_features,
+            'whats_included' => $whats_included,
+            'pricing_details' => $pricing_details,
+            'verified_details' => array_slice(array_values(array_unique($verified_details)), 0, 8),
+            'evidence' => array(
+                'designer' => $designer_evidence,
+                'foundry' => sanitize_text_field((string) (($payload['evidence']['foundry'] ?? ''))),
+                'font_style' => sanitize_text_field((string) (($payload['evidence']['font_style'] ?? ''))),
+                'font_mood' => sanitize_text_field((string) (($payload['evidence']['font_mood'] ?? ''))),
+                'font_use_case' => sanitize_text_field((string) (($payload['evidence']['font_use_case'] ?? ''))),
+            ),
+            'confidence' => $confidence,
+            'content' => $this->build_generated_font_content(array(
+                'title' => $title,
+                'font_name' => $font_name,
+                'url' => esc_url_raw($url),
+                'image_url' => esc_url_raw((string) ($payload['image_url'] ?? '')),
+                'designer_names' => $designer_names,
+                'foundry_name' => $foundry_name,
+                'font_style_name' => $this->canonical_font_style_name((string) ($payload['font_style_name'] ?? '')),
+                'font_mood_names' => $font_mood_names,
+                'font_use_case_names' => $font_use_case_names,
+                'refreshed_intro' => wp_kses_post((string) ($payload['refreshed_intro'] ?? '')),
+                'visual_analysis' => wp_kses_post((string) ($payload['visual_analysis'] ?? '')),
+                'best_for' => array_slice(array_values(array_unique($best_for)), 0, 5),
+                'pairing_notes' => $pairing_notes,
+                'font_features' => $font_features,
+                'whats_included' => $whats_included,
+                'pricing_details' => $pricing_details,
+                'verified_details' => array_slice(array_values(array_unique($verified_details)), 0, 8),
+            )),
+        );
+    }
+
+    private function resolve_designer_names($ai_designer_names, $source_entity_hints, $evidence) {
+        $source_designer_names = !empty($source_entity_hints['designer_names']) ? $this->sanitize_name_list($source_entity_hints['designer_names']) : array();
+        $source_evidence = sanitize_text_field((string) ($source_entity_hints['designer_evidence'] ?? ''));
+        $ai_evidence = sanitize_text_field((string) ($evidence['designer'] ?? ''));
+
+        if (!empty($source_designer_names)) {
+            return array(
+                'designer_names' => $source_designer_names,
+                'confidence' => 0.95,
+                'evidence' => $source_evidence !== '' ? $source_evidence : $ai_evidence,
+            );
+        }
+
+        if (!empty($ai_designer_names) && $this->designer_evidence_is_explicit($ai_evidence, $ai_designer_names)) {
+            return array(
+                'designer_names' => $ai_designer_names,
+                'confidence' => 0.75,
+                'evidence' => $ai_evidence,
+            );
+        }
+
+        return array(
+            'designer_names' => array(),
+            'confidence' => 0.35,
+            'evidence' => $source_evidence !== '' ? $source_evidence : $ai_evidence,
+        );
+    }
+
+    private function sanitize_pairing_notes($value) {
+        $notes = array();
+        if (is_array($value)) {
+            foreach ($value as $item) {
+                $item = sanitize_text_field((string) $item);
+                if ($item !== '') {
+                    $notes[] = $item;
+                }
+            }
+        } else {
+            $item = sanitize_text_field((string) $value);
+            if ($item !== '') {
+                $notes[] = $item;
+            }
+        }
+        return array_slice(array_values(array_unique($notes)), 0, 4);
+    }
+
+    private function sanitize_simple_bullets($value, $limit) {
+        $items = array();
+        if (is_array($value)) {
+            foreach ($value as $item) {
+                $item = sanitize_text_field((string) $item);
+                if ($item !== '') {
+                    $items[] = $item;
+                }
+            }
+        } else {
+            $item = sanitize_text_field((string) $value);
+            if ($item !== '') {
+                $items[] = $item;
+            }
+        }
+        return array_slice(array_values(array_unique($items)), 0, (int) $limit);
+    }
+
+    private function sanitize_name_list($value) {
+        $items = array();
+        if (is_string($value)) {
+            $value = explode(',', $value);
+        }
+        foreach ((array) $value as $item) {
+            $item = sanitize_text_field((string) $item);
+            if ($item !== '') {
+                $items[] = $item;
+            }
+        }
+        return array_slice(array_values(array_unique($items)), 0, 8);
+    }
+
+    private function sanitize_canonical_name_list($value, $callback) {
+        $items = array();
+        if (is_string($value)) {
+            $value = explode(',', $value);
+        }
+        foreach ((array) $value as $item) {
+            $item = method_exists($this, $callback) ? $this->{$callback}((string) $item) : '';
+            if ($item !== '') {
+                $items[] = $item;
+            }
+        }
+        return array_slice(array_values(array_unique($items)), 0, 8);
+    }
+
+    private function build_generated_font_content($data) {
+        $font_name = sanitize_text_field((string) ($data['font_name'] ?? ''));
+        $title = sanitize_text_field((string) ($data['title'] ?? ''));
+        $url = esc_url((string) ($data['url'] ?? ''));
+        $image_url = esc_url((string) ($data['image_url'] ?? ''));
+        $designer_names = !empty($data['designer_names']) && is_array($data['designer_names']) ? (array) $data['designer_names'] : array();
+        $foundry_name = sanitize_text_field((string) ($data['foundry_name'] ?? ''));
+        $font_style_name = sanitize_text_field((string) ($data['font_style_name'] ?? ''));
+        $font_mood_names = !empty($data['font_mood_names']) && is_array($data['font_mood_names']) ? (array) $data['font_mood_names'] : array();
+        $font_use_case_names = !empty($data['font_use_case_names']) && is_array($data['font_use_case_names']) ? (array) $data['font_use_case_names'] : array();
+        $refreshed_intro = wp_kses_post((string) ($data['refreshed_intro'] ?? ''));
+        $visual_analysis = wp_kses_post((string) ($data['visual_analysis'] ?? ''));
+        $pairing_notes = !empty($data['pairing_notes']) && is_array($data['pairing_notes']) ? (array) $data['pairing_notes'] : array();
+        $font_features = !empty($data['font_features']) && is_array($data['font_features']) ? (array) $data['font_features'] : array();
+        $whats_included = !empty($data['whats_included']) && is_array($data['whats_included']) ? (array) $data['whats_included'] : array();
+        $pricing_details = !empty($data['pricing_details']) && is_array($data['pricing_details']) ? (array) $data['pricing_details'] : array();
+        $best_for = !empty($data['best_for']) && is_array($data['best_for']) ? (array) $data['best_for'] : array();
+        $verified_details = !empty($data['verified_details']) && is_array($data['verified_details']) ? (array) $data['verified_details'] : array();
+
+        $parts = array();
+
+        if ($image_url !== '') {
+            $parts[] = '<img src="' . $image_url . '" alt="' . esc_attr($title !== '' ? $title : $font_name) . '" style="max-width:100%; height:auto;" />';
+        }
+
+        if ($title !== '') {
+            $parts[] = '<p>' . esc_html($title) . '</p>';
+        }
+
+        if ($url !== '' && $font_name !== '') {
+            $parts[] = '<p style="text-align: center"><a href="' . $url . '" class="btn btn-primary" target="_blank" rel="noopener">View &amp; Purchase ' . esc_html($font_name) . '</a></p>';
+        }
+
+        if ($font_name !== '') {
+            $parts[] = '<p style="background:#f7f7f7;padding:12px;border-left:4px solid #FF3366;font-size:14px;line-height:1.6"><strong>Important Notice</strong><br> ' . esc_html($font_name) . ' is a <strong>premium commercial font</strong> created by its original designer and is <strong>not available for free download</strong> on Kreativ Font. To use this typeface legally in personal or commercial projects, it must be purchased from an official marketplace.</p>';
+        }
+
+        $parts[] = '<p style="background:#f7f7f7;padding:12px;border-left:4px solid #00C2FF;font-size:14px;line-height:1.6;margin-top:10px">Looking for <strong>free fonts instead</strong>? Kreativ Font curates and reviews <strong>legitimately free fonts</strong> and carefully selected free alternatives with proper licenses — no pirated or redistributed files. <a href="https://kreativfont.com/free">Discover free fonts &amp; alternatives</a> OR <a href="https://www.patreon.com/cw/kreativfont" style="font-size:14px">join the Kreativ Font Free Tier</a></p>';
+
+        if ($url !== '' && $font_name !== '') {
+            $lead = '<p><a href="' . $url . '" target="_blank" rel="noopener">' . esc_html($font_name) . '</a>';
+            if ($font_style_name !== '') {
+                $lead .= ' is a ' . esc_html($font_style_name) . ' typeface';
+            } else {
+                $lead .= ' is a typeface';
+            }
+            if (!empty($font_mood_names)) {
+                $lead .= ' with a ' . esc_html(strtolower(implode(', ', $font_mood_names))) . ' mood';
+            }
+            if (!empty($font_use_case_names)) {
+                $lead .= ' suited for ' . esc_html(implode(', ', $font_use_case_names));
+            }
+            if (!empty($designer_names)) {
+                $lead .= ' designed by ' . esc_html(implode(', ', $designer_names));
+            }
+            if ($foundry_name !== '') {
+                $lead .= ' and published by ' . esc_html($foundry_name);
+            }
+            $lead .= '.</p>';
+            $parts[] = $lead;
+        }
+
+        $template = (string) get_option('kaco_update_template', '');
+        $parts[] = $this->render_template($template, 0, array(
+            'ai_intro' => $refreshed_intro,
+            'visual_analysis' => $visual_analysis,
+            'best_for' => $best_for,
+            'pairing_notes' => $pairing_notes,
+            'font_features' => $font_features,
+            'whats_included' => $whats_included,
+            'pricing_details' => $pricing_details,
+            'verified_details' => $verified_details,
+            'related_links' => array(),
+        ));
+
+        return trim(implode("\n\n", array_filter($parts)));
+    }
+
+    private function extract_font_name_from_title($title) {
+        $title = trim((string) $title);
+        if ($title === '') {
+            return '';
+        }
+
+        if (strpos($title, ' - ') !== false) {
+            return trim((string) strstr($title, ' - ', true));
+        }
+
+        return $title;
+    }
+
+    private function sanitize_generated_title($title, $font_name_hint) {
+        $font_name_hint = sanitize_text_field((string) $font_name_hint);
+        $title = sanitize_text_field((string) $title);
+        if ($font_name_hint === '') {
+            return $title;
+        }
+        if ($title === '') {
+            return $font_name_hint;
+        }
+        if (stripos($title, $font_name_hint . ' - ') === 0) {
+            return $title;
+        }
+        return $font_name_hint;
+    }
+
+    private function infer_font_name_from_source_url($url) {
+        $path = (string) wp_parse_url((string) $url, PHP_URL_PATH);
+        if ($path === '') {
+            return '';
+        }
+        $segments = array_values(array_filter(explode('/', trim($path, '/'))));
+        $last = !empty($segments) ? end($segments) : '';
+        $last = is_string($last) ? $last : '';
+        if ($last === '') {
+            return '';
+        }
+        if (strpos($last, '-font-') !== false) {
+            $parts = explode('-font-', $last);
+            $candidate = reset($parts);
+            return $this->humanize_slug($candidate);
+        }
+        return '';
+    }
+
+    private function infer_foundry_name_from_source_url($url) {
+        $path = (string) wp_parse_url((string) $url, PHP_URL_PATH);
+        if ($path === '') {
+            return '';
+        }
+        $segments = array_values(array_filter(explode('/', trim($path, '/'))));
+        $last = !empty($segments) ? end($segments) : '';
+        $last = is_string($last) ? $last : '';
+        if ($last === '') {
+            return '';
+        }
+        if (strpos($last, '-font-') !== false) {
+            $parts = explode('-font-', $last);
+            $candidate = end($parts);
+            return $this->humanize_slug($candidate);
+        }
+        return '';
+    }
+
+    private function fetch_source_context($url) {
+        $url = esc_url_raw((string) $url);
+        if ($url === '') {
+            return array();
+        }
+
+        $response = wp_remote_get($url, array(
+            'timeout' => 20,
+            'redirection' => 5,
+            'headers' => array(
+                'User-Agent' => 'KREATIV-AI-Content-Optimizer/1.0; ' . home_url('/'),
+            ),
+        ));
+        if (is_wp_error($response)) {
+            return array();
+        }
+
+        $code = (int) wp_remote_retrieve_response_code($response);
+        $html = (string) wp_remote_retrieve_body($response);
+        if ($code < 200 || $code >= 300 || $html === '') {
+            return array();
+        }
+
+        return array(
+            'title' => $this->extract_html_title($html),
+            'og_title' => $this->extract_meta_content($html, array('og:title', 'twitter:title')),
+            'description' => $this->extract_meta_content($html, array('description', 'og:description', 'twitter:description')),
+            'text_excerpt' => $this->extract_html_text_excerpt($html, 5000),
+        );
+    }
+
+    private function extract_source_entity_hints($source_context, $font_name_hint, $foundry_hint) {
+        $text = '';
+        if (!empty($source_context['title'])) {
+            $text .= ' ' . (string) $source_context['title'];
+        }
+        if (!empty($source_context['og_title'])) {
+            $text .= ' ' . (string) $source_context['og_title'];
+        }
+        if (!empty($source_context['description'])) {
+            $text .= ' ' . (string) $source_context['description'];
+        }
+        if (!empty($source_context['text_excerpt'])) {
+            $text .= ' ' . (string) $source_context['text_excerpt'];
+        }
+        $text = preg_replace('/\s+/', ' ', (string) $text);
+
+        $designer_names = array();
+        $designer_evidence = '';
+        if (preg_match('/designed by\s+([^.;|]+?)(?:\s+and\s+published by|\s+published by|[.;|]|$)/i', $text, $matches)) {
+            $designer_names = $this->sanitize_name_list($matches[1]);
+            $designer_evidence = sanitize_text_field('Designed by ' . trim((string) $matches[1]));
+        } elseif (preg_match('/designer\s*:\s*([^.;|]+?)(?:\s+foundry\s*:|\s+publisher\s*:|[.;|]|$)/i', $text, $matches)) {
+            $designer_names = $this->sanitize_name_list($matches[1]);
+            $designer_evidence = sanitize_text_field('Designer: ' . trim((string) $matches[1]));
+        }
+
+        $foundry_name = '';
+        if (preg_match('/published by\s+([^.;|]+?)(?:\s+on\s+|[.;|]|$)/i', $text, $matches)) {
+            $foundry_name = sanitize_text_field((string) $matches[1]);
+        }
+        if ($foundry_name === '' && $foundry_hint !== '') {
+            $foundry_name = $foundry_hint;
+        }
+
+        if ($font_name_hint !== '' && $foundry_name !== '' && strcasecmp($font_name_hint, $foundry_name) === 0 && $foundry_hint !== '') {
+            $foundry_name = $foundry_hint;
+        }
+
+        return array(
+            'designer_names' => $designer_names,
+            'designer_evidence' => $designer_evidence,
+            'foundry_name' => $foundry_name,
+        );
+    }
+
+    private function designer_evidence_is_explicit($evidence, $designer_names) {
+        $evidence = strtolower((string) $evidence);
+        if ($evidence === '') {
+            return false;
+        }
+        if (strpos($evidence, 'designed by') === false && strpos($evidence, 'designer:') === false) {
+            return false;
+        }
+        foreach ((array) $designer_names as $name) {
+            $name = strtolower((string) $name);
+            if ($name !== '' && strpos($evidence, $name) !== false) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function extract_html_title($html) {
+        if (preg_match('/<title[^>]*>(.*?)<\/title>/is', (string) $html, $matches)) {
+            return sanitize_text_field(wp_strip_all_tags(html_entity_decode((string) $matches[1], ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+        }
+        return '';
+    }
+
+    private function extract_meta_content($html, $names) {
+        foreach ((array) $names as $name) {
+            $quoted = preg_quote((string) $name, '/');
+            if (preg_match('/<meta[^>]+(?:name|property)=["\']' . $quoted . '["\'][^>]+content=["\']([^"\']+)["\']/i', (string) $html, $matches)
+                || preg_match('/<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:name|property)=["\']' . $quoted . '["\']/i', (string) $html, $matches)) {
+                return sanitize_text_field(html_entity_decode((string) $matches[1], ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+            }
+        }
+        return '';
+    }
+
+    private function extract_html_text_excerpt($html, $limit) {
+        $html = preg_replace('/<script\b[^>]*>.*?<\/script>/is', ' ', (string) $html);
+        $html = preg_replace('/<style\b[^>]*>.*?<\/style>/is', ' ', (string) $html);
+        $text = html_entity_decode(wp_strip_all_tags((string) $html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $text = preg_replace('/\s+/', ' ', (string) $text);
+        $text = trim((string) $text);
+        return $limit > 0 ? substr($text, 0, (int) $limit) : $text;
+    }
+
+    private function humanize_slug($value) {
+        $value = trim((string) $value);
+        if ($value === '') {
+            return '';
+        }
+        $value = str_replace(array('-', '_'), ' ', $value);
+        $value = preg_replace('/\s+/', ' ', $value);
+        return ucwords(trim((string) $value));
+    }
+
+    private function get_generator_previews() {
+        $store = get_option('kaco_generator_preview_store', array());
+        if (!is_array($store)) {
+            return array();
+        }
+
+        $user_id = (int) get_current_user_id();
+        $previews = $store[$user_id] ?? array();
+        return is_array($previews) ? $previews : array();
+    }
+
+    private function set_generator_previews($previews) {
+        $store = get_option('kaco_generator_preview_store', array());
+        if (!is_array($store)) {
+            $store = array();
+        }
+
+        $user_id = (int) get_current_user_id();
+        $store[$user_id] = is_array($previews) ? array_values($previews) : array();
+        update_option('kaco_generator_preview_store', $store, false);
+    }
+
+    private function create_generated_draft_from_preview($preview) {
+        $title = sanitize_text_field((string) ($preview['title'] ?? ''));
+        $content = wp_kses_post((string) ($preview['content'] ?? ''));
+        $source_url = esc_url_raw((string) ($preview['url'] ?? ''));
+        if ($title === '' || $content === '') {
+            return 0;
+        }
+
+        $existing_post_id = $this->find_existing_generated_post_by_source_url($source_url);
+        if ($existing_post_id > 0) {
+            return 0;
+        }
+
+        $tags = array();
+        $raw_tags = $preview['tags'] ?? array();
+        if (is_string($raw_tags)) {
+            $raw_tags = explode(',', $raw_tags);
+        }
+        foreach ((array) $raw_tags as $tag) {
+            $tag = sanitize_text_field((string) $tag);
+            if ($tag !== '') {
+                $tags[] = $tag;
+            }
+        }
+        $tags = array_values(array_unique($tags));
+
+        $post_id = wp_insert_post(array(
+            'post_type' => 'post',
+            'post_status' => 'draft',
+            'post_title' => $title,
+            'post_content' => $content,
+            'tags_input' => $tags,
+        ), true);
+
+        if (is_wp_error($post_id) || !$post_id) {
+            return 0;
+        }
+
+        update_post_meta((int) $post_id, '_kaco_source_url', $source_url);
+        update_post_meta((int) $post_id, '_kaco_source_marketplace', $this->detect_marketplace_name($source_url));
+        update_post_meta((int) $post_id, '_kaco_generated_at', current_time('mysql', true));
+
+        $category_result = $this->assign_generated_post_categories((int) $post_id, $preview);
+        $linked_terms = !empty($category_result['linked_terms']) ? (array) $category_result['linked_terms'] : array();
+        $created_terms = !empty($category_result['created_terms']) ? (array) $category_result['created_terms'] : array();
+        $this->queue_category_description_drafts_for_terms($created_terms);
+
+        $image_url = esc_url_raw((string) ($preview['image_url'] ?? ''));
+        if ($image_url !== '') {
+            $attachment_id = $this->sideload_generated_post_image((int) $post_id, $image_url, $title);
+            if ($attachment_id) {
+                $local_image_url = wp_get_attachment_url((int) $attachment_id);
+                if ($local_image_url) {
+                    $updated_content = $this->inject_local_image_into_content($content, $image_url, $local_image_url, $title);
+                    if ($updated_content !== $content) {
+                        wp_update_post(array(
+                            'ID' => (int) $post_id,
+                            'post_content' => $updated_content,
+                        ));
+                    }
+                }
+            }
+        }
+
+        if (!empty($linked_terms)) {
+            $content = (string) get_post_field('post_content', (int) $post_id);
+            $relinked_content = $this->replace_generator_lead_paragraph($content, $preview, $linked_terms);
+            $relinked_content = $this->relink_font_mentions_to_internal_categories($relinked_content, $linked_terms);
+            if ($relinked_content !== $content) {
+                wp_update_post(array(
+                    'ID' => (int) $post_id,
+                    'post_content' => $relinked_content,
+                ));
+            }
+        }
+
+        return (int) $post_id;
+    }
+
+    private function assign_generated_post_categories($post_id, $preview) {
+        if (!taxonomy_exists('category')) {
+            return array(
+                'linked_terms' => array(),
+                'created_terms' => array(),
+            );
+        }
+
+        $category_ids = wp_get_post_terms((int) $post_id, 'category', array('fields' => 'ids'));
+        if (is_wp_error($category_ids) || !is_array($category_ids)) {
+            $category_ids = array();
+        }
+
+        $targets = $this->font_category_parent_targets();
+        $fonts_term = $this->find_category_by_name($targets['fonts']);
+        if ($fonts_term) {
+            $category_ids[] = (int) $fonts_term->term_id;
+        }
+
+        $linked_terms = array();
+        $created_terms = array();
+        $targets_map = array(
+            'designer_names' => 'designer',
+            'foundry_name' => 'foundry',
+            'font_style_name' => 'font_style',
+            'font_mood_names' => 'font_mood',
+            'font_use_case_names' => 'font_use_case',
+        );
+        foreach ($targets_map as $field => $target_key) {
+            $parent_term = $this->find_category_by_name($targets[$target_key]);
+            if (!$parent_term) {
+                continue;
+            }
+            $current_terms = wp_get_post_terms((int) $post_id, 'category');
+            if (is_wp_error($current_terms) || !is_array($current_terms)) {
+                $current_terms = array();
+            }
+            $values = $this->normalize_hierarchy_input_values($preview[$field] ?? array(), $target_key);
+            $existing_children = $this->find_assigned_child_categories($current_terms, (int) $parent_term->term_id);
+            if (!empty($existing_children)) {
+                $category_ids = array_values(array_diff($category_ids, wp_list_pluck($existing_children, 'term_id')));
+            }
+            if (empty($values)) {
+                continue;
+            }
+            $detail_terms = $this->resolve_hierarchy_terms_for_parent($values, $target_key, (int) $parent_term->term_id);
+            foreach ($detail_terms as $detail) {
+                if (empty($detail['term']) || is_wp_error($detail['term'])) {
+                    continue;
+                }
+                if (!isset($linked_terms[$target_key])) {
+                    $linked_terms[$target_key] = array();
+                }
+                $linked_terms[$target_key][] = $detail['term'];
+                $category_ids[] = (int) $detail['term']->term_id;
+                if (!empty($detail['created'])) {
+                    $created_terms[(int) $detail['term']->term_id] = $detail['term'];
+                }
+            }
+        }
+        foreach ($linked_terms as $terms) {
+            foreach ((array) $terms as $term) {
+                if ($term && !is_wp_error($term)) {
+                    $category_ids[] = (int) $term->term_id;
+                }
+            }
+        }
+
+        $category_ids = array_values(array_unique(array_map('intval', $category_ids)));
+        if (!empty($category_ids)) {
+            wp_set_post_terms((int) $post_id, $category_ids, 'category', false);
+        }
+
+        return array(
+            'linked_terms' => $linked_terms,
+            'created_terms' => array_values($created_terms),
+        );
+    }
+
+    private function sideload_generated_post_image($post_id, $image_url, $title) {
+        require_once ABSPATH . 'wp-admin/includes/image.php';
+        require_once ABSPATH . 'wp-admin/includes/file.php';
+        require_once ABSPATH . 'wp-admin/includes/media.php';
+
+        $tmp = download_url($image_url);
+        if (is_wp_error($tmp)) {
+            return false;
+        }
+
+        $filetype = wp_check_filetype(basename($image_url));
+        $extension = !empty($filetype['ext']) ? '.' . $filetype['ext'] : '.jpg';
+        $filename = sanitize_title($title) . $extension;
+        $file_array = array(
+            'name' => $filename,
+            'tmp_name' => $tmp,
+        );
+
+        $attachment_id = media_handle_sideload($file_array, (int) $post_id, $title);
+        if (is_wp_error($attachment_id)) {
+            @unlink($tmp);
+            return false;
+        }
+
+        set_post_thumbnail((int) $post_id, (int) $attachment_id);
+        return (int) $attachment_id;
+    }
+
+    private function replace_generator_lead_paragraph($content, $preview, $linked_terms) {
+        $content = (string) $content;
+        $source_url = esc_url((string) ($preview['url'] ?? ''));
+        $font_name = $this->extract_font_name_from_title((string) ($preview['title'] ?? ''));
+        $lead = $this->build_generator_lead_paragraph(
+            $source_url,
+            $font_name,
+            $this->first_linked_term($linked_terms['font_style'] ?? array()),
+            $linked_terms['font_mood'] ?? array(),
+            $linked_terms['font_use_case'] ?? array(),
+            $linked_terms['designer'] ?? array(),
+            $this->first_linked_term($linked_terms['foundry'] ?? array()),
+            sanitize_text_field((string) ($preview['font_style_name'] ?? '')),
+            (array) ($preview['font_mood_names'] ?? array()),
+            (array) ($preview['font_use_case_names'] ?? array()),
+            (array) ($preview['designer_names'] ?? array()),
+            sanitize_text_field((string) ($preview['foundry_name'] ?? ''))
+        );
+        if ($lead === '') {
+            return $content;
+        }
+
+        if ($source_url !== '') {
+            $pattern = '/<p>\s*<a href="' . preg_quote($source_url, '/') . '"[^>]*target="_blank"[^>]*rel="noopener"[^>]*>.*?<\/a>.*?<\/p>/is';
+            $updated = preg_replace($pattern, $lead, $content, 1, $count);
+            if ($count > 0) {
+                return $updated;
+            }
+        }
+
+        return $content . "\n\n" . $lead;
+    }
+
+    private function first_linked_term($terms) {
+        foreach ((array) $terms as $term) {
+            if ($term && !is_wp_error($term)) {
+                return $term;
+            }
+        }
+        return null;
+    }
+
+    private function build_generator_lead_paragraph($source_url, $font_name, $font_style_term, $font_mood_terms, $font_use_case_terms, $designer_terms, $foundry_term, $font_style_name, $font_mood_names, $font_use_case_names, $designer_names, $foundry_name) {
+        $source_url = esc_url((string) $source_url);
+        $font_name = sanitize_text_field((string) $font_name);
+        if ($source_url === '' || $font_name === '') {
+            return '';
+        }
+
+        $lead = '<p><a href="' . $source_url . '" target="_blank" rel="noopener">' . esc_html($font_name) . '</a>';
+        if ($font_style_term && !is_wp_error($font_style_term)) {
+            $style_url = get_term_link($font_style_term, 'category');
+            $style_label = (string) $font_style_term->name;
+            if (!is_wp_error($style_url)) {
+                $lead .= ' is a <a href="' . esc_url($style_url) . '">' . esc_html($style_label) . '</a> typeface';
+            }
+        } elseif ($font_style_name !== '') {
+            $lead .= ' is a ' . esc_html($font_style_name) . ' typeface';
+        } else {
+            $lead .= ' is a typeface';
+        }
+
+        $mood_links = $this->term_links_inline($font_mood_terms, true);
+        if ($mood_links !== '') {
+            $lead .= ' with a ' . $mood_links . ' mood';
+        } elseif (!empty($font_mood_names)) {
+            $lead .= ' with a ' . esc_html(strtolower(implode(', ', (array) $font_mood_names))) . ' mood';
+        }
+
+        $use_case_links = $this->term_links_inline($font_use_case_terms, false);
+        if ($use_case_links !== '') {
+            $lead .= ' suited for ' . $use_case_links;
+        } elseif (!empty($font_use_case_names)) {
+            $lead .= ' suited for ' . esc_html(implode(', ', (array) $font_use_case_names));
+        }
+
+        $designer_links = $this->term_links_inline($designer_terms, false);
+        if ($designer_links !== '') {
+            $lead .= ' designed by ' . $designer_links;
+        } elseif (!empty($designer_names)) {
+            $lead .= ' designed by ' . esc_html(implode(', ', (array) $designer_names));
+        }
+
+        if ($foundry_term && !is_wp_error($foundry_term)) {
+            $foundry_url = get_term_link($foundry_term, 'category');
+            $foundry_label = (string) $foundry_term->name;
+            if (!is_wp_error($foundry_url)) {
+                $lead .= ' and published by <a href="' . esc_url($foundry_url) . '">' . esc_html($foundry_label) . '</a>';
+            }
+        } elseif ($foundry_name !== '') {
+            $lead .= ' and published by ' . esc_html($foundry_name);
+        }
+
+        $lead .= '.</p>';
+        return $lead;
+    }
+
+    private function term_links_inline($terms, $lowercase) {
+        $links = array();
+        foreach ((array) $terms as $term) {
+            if (!$term || is_wp_error($term)) {
+                continue;
+            }
+            $url = get_term_link($term, 'category');
+            if (is_wp_error($url)) {
+                continue;
+            }
+            $label = (string) $term->name;
+            if ($lowercase) {
+                $label = strtolower($label);
+            }
+            $links[] = '<a href="' . esc_url($url) . '">' . esc_html($label) . '</a>';
+        }
+        return implode(', ', $links);
+    }
+
+    private function inject_local_image_into_content($content, $remote_image_url, $local_image_url, $title) {
+        $content = (string) $content;
+        $remote_image_url = esc_url_raw((string) $remote_image_url);
+        $local_image_url = esc_url_raw((string) $local_image_url);
+        $title = sanitize_text_field((string) $title);
+
+        if ($content === '' || $local_image_url === '') {
+            return $content;
+        }
+
+        if ($remote_image_url !== '' && strpos($content, $remote_image_url) !== false) {
+            return str_replace($remote_image_url, $local_image_url, $content);
+        }
+
+        if (preg_match('/<img\b[^>]*src=["\'][^"\']+["\'][^>]*>/i', $content)) {
+            return preg_replace(
+                '/<img\b([^>]*)src=["\'][^"\']+["\']([^>]*)>/i',
+                '<img$1src="' . esc_url($local_image_url) . '"$2>',
+                $content,
+                1
+            );
+        }
+
+        $image_html = '<img src="' . esc_url($local_image_url) . '" alt="' . esc_attr($title) . '" style="max-width:100%; height:auto;" />';
+        return $image_html . "\n\n" . $content;
+    }
+
+    private function find_existing_generated_post_by_source_url($source_url) {
+        $source_url = esc_url_raw((string) $source_url);
+        if ($source_url === '') {
+            return 0;
+        }
+
+        $query = new WP_Query(array(
+            'post_type' => 'post',
+            'post_status' => array('publish', 'draft', 'pending', 'private'),
+            'posts_per_page' => 1,
+            'fields' => 'ids',
+            'meta_query' => array(
+                array(
+                    'key' => '_kaco_source_url',
+                    'value' => $source_url,
+                ),
+            ),
+        ));
+
+        return !empty($query->posts[0]) ? (int) $query->posts[0] : 0;
+    }
+
+    private function request_category_description_ai($term) {
+        $api_key = (string) get_option('kaco_openai_api_key', '');
+        $endpoint = (string) get_option('kaco_openai_endpoint', self::OPENAI_ENDPOINT);
+        $model = (string) get_option('kaco_openai_model', self::OPENAI_MODEL);
+        if ($api_key === '' || $endpoint === '' || $model === '') {
+            return false;
+        }
+
+        $body = array(
+            'model' => $model,
+            'response_format' => array('type' => 'json_object'),
+            'temperature' => 0.2,
+            'messages' => array(
+                array('role' => 'system', 'content' => 'You write concise SEO-aware WordPress category descriptions for a font marketplace. Return valid minified JSON only.'),
+                array('role' => 'user', 'content' => wp_json_encode(array(
+                    'task' => 'Write a category description.',
+                    'output_schema' => array('description' => 'string'),
+                    'term' => array(
+                        'id' => (int) $term->term_id,
+                        'taxonomy' => 'category',
+                        'name' => (string) $term->name,
+                        'slug' => (string) $term->slug,
+                        'count' => (int) $term->count,
+                        'current_description' => (string) $term->description,
+                    ),
+                    'constraints' => array('2_to_4_sentences', 'specific_to_font_category', 'no_keyword_stuffing', 'no_markdown'),
+                ))),
+            ),
+        );
+
+        $response = wp_remote_post($endpoint, array(
+            'timeout' => 60,
+            'headers' => array('Authorization' => 'Bearer ' . $api_key, 'Content-Type' => 'application/json'),
+            'body' => wp_json_encode($body),
+        ));
+        if (is_wp_error($response)) {
+            return false;
+        }
+        $code = (int) wp_remote_retrieve_response_code($response);
+        $raw = (string) wp_remote_retrieve_body($response);
+        if ($code < 200 || $code >= 300 || $raw === '') {
+            return false;
+        }
+        $json = json_decode($raw, true);
+        $content = !empty($json['choices'][0]['message']['content']) ? (string) $json['choices'][0]['message']['content'] : '';
+        if ($content === '') {
+            return false;
+        }
+        $decoded = json_decode($content, true);
+        if (!is_array($decoded) || empty($decoded['description'])) {
+            return false;
+        }
+        return wp_kses_post((string) $decoded['description']);
+    }
+
+    private function sanitize_ai_payload($payload) {
+        $safe = array(
+            'title' => sanitize_text_field((string) ($payload['title'] ?? '')),
+            'refreshed_intro' => wp_kses_post((string) ($payload['refreshed_intro'] ?? '')),
+            'visual_analysis' => wp_kses_post((string) ($payload['visual_analysis'] ?? '')),
+            'best_for' => array(),
+            'pairing_notes' => array(),
+            'font_features' => array(),
+            'whats_included' => array(),
+            'pricing_details' => array(),
+            'verified_details' => array(),
+            'content_append' => wp_kses_post((string) ($payload['content_append'] ?? '')),
+            'excerpt' => sanitize_textarea_field((string) ($payload['excerpt'] ?? '')),
+            'term_descriptions' => array(),
+            'font_category_hierarchy' => array(),
+            'evidence' => array(),
+            'internal_links' => array(),
+            'confidence' => max(0, min(1, (float) ($payload['confidence'] ?? 0))),
+            'notes' => sanitize_textarea_field((string) ($payload['notes'] ?? '')),
+        );
+
+        if (!empty($payload['internal_links']) && is_array($payload['internal_links'])) {
+            foreach ($payload['internal_links'] as $link) {
+                if (!is_array($link)) {
+                    continue;
+                }
+                $url = esc_url_raw((string) ($link['url'] ?? ''));
+                $anchor = sanitize_text_field((string) ($link['anchor'] ?? ''));
+                $reason = sanitize_text_field((string) ($link['reason'] ?? ''));
+                if ($url !== '' && $anchor !== '') {
+                    $safe['internal_links'][] = array('url' => $url, 'anchor' => $anchor, 'reason' => $reason);
+                }
+            }
+        }
+
+        $safe['best_for'] = $this->sanitize_simple_bullets($payload['best_for'] ?? array(), 5);
+        $safe['pairing_notes'] = $this->sanitize_pairing_notes($payload['pairing_notes'] ?? array());
+        $safe['font_features'] = $this->sanitize_simple_bullets($payload['font_features'] ?? array(), 8);
+        $safe['whats_included'] = $this->sanitize_simple_bullets($payload['whats_included'] ?? array(), 8);
+        $safe['pricing_details'] = $this->sanitize_simple_bullets($payload['pricing_details'] ?? array(), 5);
+        $safe['verified_details'] = $this->sanitize_simple_bullets($payload['verified_details'] ?? array(), 8);
+
+        if (!empty($payload['term_descriptions']) && is_array($payload['term_descriptions'])) {
+            foreach ($payload['term_descriptions'] as $taxonomy => $items) {
+                $taxonomy = sanitize_key((string) $taxonomy);
+                if (!is_array($items)) {
+                    continue;
+                }
+                $safe['term_descriptions'][$taxonomy] = array();
+                foreach ($items as $item) {
+                    if (!is_array($item)) {
+                        continue;
+                    }
+                    $term_name = sanitize_text_field((string) ($item['term'] ?? ''));
+                    $desc = wp_kses_post((string) ($item['description'] ?? ''));
+                    if ($term_name !== '' && $desc !== '') {
+                        $safe['term_descriptions'][$taxonomy][] = array('term' => $term_name, 'description' => $desc);
+                    }
+                }
+            }
+        }
+
+        if (!empty($payload['font_category_hierarchy']) && is_array($payload['font_category_hierarchy'])) {
+            $safe['font_category_hierarchy'] = array(
+                'designer_names' => $this->sanitize_name_list($payload['font_category_hierarchy']['designer_names'] ?? ($payload['font_category_hierarchy']['designer_name'] ?? array())),
+                'foundry_name' => sanitize_text_field((string) ($payload['font_category_hierarchy']['foundry_name'] ?? '')),
+                'font_style_name' => $this->canonical_font_style_name((string) ($payload['font_category_hierarchy']['font_style_name'] ?? '')),
+                'font_mood_names' => $this->sanitize_canonical_name_list($payload['font_category_hierarchy']['font_mood_names'] ?? ($payload['font_category_hierarchy']['font_mood_name'] ?? array()), 'canonical_font_mood_name'),
+                'font_use_case_names' => $this->sanitize_canonical_name_list($payload['font_category_hierarchy']['font_use_case_names'] ?? ($payload['font_category_hierarchy']['font_use_case_name'] ?? array()), 'canonical_font_use_case_name'),
+                'notes' => sanitize_textarea_field((string) ($payload['font_category_hierarchy']['notes'] ?? '')),
+            );
+        }
+
+        if (!empty($payload['evidence']) && is_array($payload['evidence'])) {
+            $safe['evidence'] = array(
+                'designer' => sanitize_text_field((string) ($payload['evidence']['designer'] ?? '')),
+                'foundry' => sanitize_text_field((string) ($payload['evidence']['foundry'] ?? '')),
+                'font_style' => sanitize_text_field((string) ($payload['evidence']['font_style'] ?? '')),
+                'font_mood' => sanitize_text_field((string) ($payload['evidence']['font_mood'] ?? '')),
+                'font_use_case' => sanitize_text_field((string) ($payload['evidence']['font_use_case'] ?? '')),
+            );
+        }
+
+        return $safe;
+    }
+
+    private function detect_marketplace_name($url) {
+        $host = (string) wp_parse_url((string) $url, PHP_URL_HOST);
+        $host = preg_replace('/^www\./', '', strtolower($host));
+        if (strpos($host, 'myfonts.com') !== false) {
+            return 'MyFonts';
+        }
+        if (strpos($host, 'creativemarket.com') !== false) {
+            return 'Creative Market';
+        }
+        if (strpos($host, 'creativefabrica.com') !== false) {
+            return 'Creative Fabrica';
+        }
+        return $host !== '' ? $host : 'Unknown';
+    }
+}
