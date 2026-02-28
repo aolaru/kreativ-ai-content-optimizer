@@ -310,6 +310,8 @@ trait KACO_AI_Generator_Trait {
                 'avoid filler phrases like versatile, unique touch, reliable choice, and suitable for various projects',
                 'use at least two concrete visual observations',
                 'best use cases must be specific to the font style',
+                'avoid generic use case bullets such as branding and logos, editorial and social media, and packaging and display unless the source clearly justifies them',
+                'do not repeat the foundry name as the font name or the font name as the foundry',
                 'use source_context and source_hints as primary evidence, do not infer entities from brand names loosely',
                 'do not swap font name and foundry name',
                 'pairing notes must recommend 2 to 4 contrasting or supporting font directions and explain why each pairing works',
@@ -410,6 +412,7 @@ trait KACO_AI_Generator_Trait {
         $foundry_hint = $this->infer_foundry_name_from_source_url($url);
         $source_context = $this->fetch_source_context($url);
         $source_entity_hints = $this->extract_source_entity_hints($source_context, $font_name_hint, $foundry_hint);
+        $source_text = $this->build_source_text_blob($source_context);
         $title = $this->sanitize_generated_title((string) ($payload['title'] ?? ''), $font_name_hint);
         $font_name = $font_name_hint !== '' ? $font_name_hint : $this->extract_font_name_from_title($title);
         if ($font_name === '') {
@@ -435,6 +438,11 @@ trait KACO_AI_Generator_Trait {
         }
         $font_mood_names = $this->sanitize_canonical_name_list($payload['font_mood_names'] ?? ($payload['font_mood_name'] ?? array()), 'canonical_font_mood_name');
         $font_use_case_names = $this->sanitize_canonical_name_list($payload['font_use_case_names'] ?? ($payload['font_use_case_name'] ?? array()), 'canonical_font_use_case_name');
+        $font_features = $this->filter_supported_fact_bullets($font_features, $source_text, array('style', 'weight', 'italic', 'condensed', 'ligature', 'alternate', 'glyph', 'multilingual', 'desktop', 'webfont', 'woff', 'otf', 'ttf'));
+        $whats_included = $this->filter_supported_fact_bullets($whats_included, $source_text, array('family', 'styles', 'font', 'desktop', 'webfont', 'woff', 'otf', 'ttf', 'package'));
+        $pricing_details = $this->filter_supported_fact_bullets($pricing_details, $source_text, array('$', 'usd', 'price', 'pricing', 'from', 'sale', 'off', 'family pack'));
+        $verified_details = $this->filter_supported_fact_bullets($verified_details, $source_text, array('designed', 'published', 'style', 'weights', 'italic', 'condensed', 'desktop', 'webfont', '$', 'usd', 'family', 'styles'));
+        $refreshed_intro = $this->polish_generator_intro((string) ($payload['refreshed_intro'] ?? ''), $font_name, $foundry_name);
 
         $designer_evidence = $designer_resolution['evidence'];
         if ($designer_evidence === '' && !empty($payload['evidence']['designer'])) {
@@ -455,7 +463,7 @@ trait KACO_AI_Generator_Trait {
             'font_mood_names' => $font_mood_names,
             'font_use_case_names' => $font_use_case_names,
             'tags' => array_slice(array_values(array_unique($tags)), 0, 12),
-            'refreshed_intro' => wp_kses_post((string) ($payload['refreshed_intro'] ?? '')),
+            'refreshed_intro' => wp_kses_post($refreshed_intro),
             'visual_analysis' => wp_kses_post((string) ($payload['visual_analysis'] ?? '')),
             'best_for' => array_slice(array_values(array_unique($best_for)), 0, 5),
             'pairing_notes' => $pairing_notes,
@@ -481,7 +489,7 @@ trait KACO_AI_Generator_Trait {
                 'font_style_name' => $this->canonical_font_style_name((string) ($payload['font_style_name'] ?? '')),
                 'font_mood_names' => $font_mood_names,
                 'font_use_case_names' => $font_use_case_names,
-                'refreshed_intro' => wp_kses_post((string) ($payload['refreshed_intro'] ?? '')),
+                'refreshed_intro' => wp_kses_post($refreshed_intro),
                 'visual_analysis' => wp_kses_post((string) ($payload['visual_analysis'] ?? '')),
                 'best_for' => array_slice(array_values(array_unique($best_for)), 0, 5),
                 'pairing_notes' => $pairing_notes,
@@ -625,42 +633,201 @@ trait KACO_AI_Generator_Trait {
         $parts[] = '<p style="background:#f7f7f7;padding:12px;border-left:4px solid #00C2FF;font-size:14px;line-height:1.6;margin-top:10px">Looking for <strong>free fonts instead</strong>? Kreativ Font curates and reviews <strong>legitimately free fonts</strong> and carefully selected free alternatives with proper licenses — no pirated or redistributed files. <a href="https://kreativfont.com/free">Discover free fonts &amp; alternatives</a> OR <a href="https://www.patreon.com/cw/kreativfont" style="font-size:14px">join the Kreativ Font Free Tier</a></p>';
 
         if ($url !== '' && $font_name !== '') {
-            $lead = '<p><a href="' . $url . '" target="_blank" rel="noopener">' . esc_html($font_name) . '</a>';
-            if ($font_style_name !== '') {
-                $lead .= ' is a ' . esc_html($font_style_name) . ' typeface';
-            } else {
-                $lead .= ' is a typeface';
-            }
-            if (!empty($font_mood_names)) {
-                $lead .= ' with a ' . esc_html(strtolower(implode(', ', $font_mood_names))) . ' mood';
-            }
-            if (!empty($font_use_case_names)) {
-                $lead .= ' suited for ' . esc_html(implode(', ', $font_use_case_names));
-            }
-            if (!empty($designer_names)) {
-                $lead .= ' designed by ' . esc_html(implode(', ', $designer_names));
-            }
-            if ($foundry_name !== '') {
-                $lead .= ' and published by ' . esc_html($foundry_name);
-            }
-            $lead .= '.</p>';
-            $parts[] = $lead;
+            $parts[] = $this->build_generated_intro_paragraph(
+                $url,
+                $font_name,
+                $font_style_name,
+                $designer_names,
+                $foundry_name
+            );
         }
 
-        $template = (string) get_option('kaco_update_template', '');
-        $parts[] = $this->render_template($template, 0, array(
-            'ai_intro' => $refreshed_intro,
-            'visual_analysis' => $visual_analysis,
-            'best_for' => $best_for,
-            'pairing_notes' => $pairing_notes,
-            'font_features' => $font_features,
-            'whats_included' => $whats_included,
-            'pricing_details' => $pricing_details,
-            'verified_details' => $verified_details,
-            'related_links' => array(),
-        ));
+        if ($refreshed_intro !== '') {
+            $parts[] = '<h2>Why you should consider ' . esc_html($font_name !== '' ? $font_name : $title) . '</h2><p>' . wp_kses_post($refreshed_intro) . '</p>';
+        }
+
+        if ($visual_analysis !== '') {
+            $parts[] = '<h2>Visual character</h2><p>' . wp_kses_post($visual_analysis) . '</p>';
+        }
+
+        if (!empty($best_for)) {
+            $parts[] = '<h2>Best use cases</h2>' . $this->html_list($best_for);
+        }
+
+        if (!empty($pairing_notes)) {
+            $parts[] = '<h2>Font pairing ideas</h2>' . $this->html_list($pairing_notes);
+        }
+
+        if (!empty($font_features)) {
+            $parts[] = '<h2>Font Features</h2>' . $this->html_list($font_features);
+        }
+
+        if (!empty($whats_included)) {
+            $parts[] = '<h2>What\'s Included</h2>' . $this->html_list($whats_included);
+        }
+
+        if (!empty($pricing_details)) {
+            $parts[] = '<h2>Pricing</h2>' . $this->html_list($pricing_details);
+        }
+
+        if (!empty($verified_details)) {
+            $parts[] = '<h2>Verified details</h2>' . $this->html_list($verified_details);
+        }
+
+        $taxonomy_snapshot = $this->build_generated_taxonomy_snapshot($font_style_name, $font_mood_names, $font_use_case_names, $designer_names, $foundry_name);
+        if ($taxonomy_snapshot !== '') {
+            $parts[] = $taxonomy_snapshot;
+        }
 
         return trim(implode("\n\n", array_filter($parts)));
+    }
+
+    private function build_generated_intro_paragraph($url, $font_name, $font_style_name, $designer_names, $foundry_name) {
+        $sentence = '<p><a href="' . esc_url($url) . '" target="_blank" rel="noopener">' . esc_html($font_name) . '</a>';
+        if ($font_style_name !== '') {
+            $sentence .= ' is a ' . esc_html(strtolower($font_style_name)) . ' typeface';
+        } else {
+            $sentence .= ' is a commercial typeface';
+        }
+
+        if (!empty($designer_names)) {
+            $sentence .= ' designed by ' . esc_html($this->compact_designer_credit($designer_names));
+        }
+        if ($foundry_name !== '') {
+            $sentence .= !empty($designer_names) ? ' and published by ' : ' published by ';
+            $sentence .= esc_html($foundry_name);
+        }
+        $sentence .= '.</p>';
+
+        return $sentence;
+    }
+
+    private function build_generated_taxonomy_snapshot($font_style_name, $font_mood_names, $font_use_case_names, $designer_names, $foundry_name) {
+        $items = array();
+        if ($font_style_name !== '') {
+            $items[] = '<li><strong>Font Style:</strong> ' . esc_html($font_style_name) . '</li>';
+        }
+        if (!empty($font_mood_names)) {
+            $items[] = '<li><strong>Font Mood:</strong> ' . esc_html($this->natural_language_list($font_mood_names)) . '</li>';
+        }
+        if (!empty($font_use_case_names)) {
+            $items[] = '<li><strong>Font Use Case:</strong> ' . esc_html($this->natural_language_list($font_use_case_names)) . '</li>';
+        }
+        if (!empty($designer_names)) {
+            $items[] = '<li><strong>Designer:</strong> ' . esc_html($this->natural_language_list($designer_names)) . '</li>';
+        }
+        if ($foundry_name !== '') {
+            $items[] = '<li><strong>Foundry:</strong> ' . esc_html($foundry_name) . '</li>';
+        }
+
+        if (empty($items)) {
+            return '';
+        }
+
+        return '<h2>Font snapshot</h2><ul>' . implode('', $items) . '</ul>';
+    }
+
+    private function html_list($items) {
+        $lines = array();
+        foreach ((array) $items as $item) {
+            $item = trim((string) $item);
+            if ($item !== '') {
+                $lines[] = '<li>' . esc_html($item) . '</li>';
+            }
+        }
+        return !empty($lines) ? '<ul>' . implode('', $lines) . '</ul>' : '';
+    }
+
+    private function natural_language_list($items) {
+        $items = array_values(array_filter(array_map('sanitize_text_field', (array) $items)));
+        $count = count($items);
+        if ($count === 0) {
+            return '';
+        }
+        if ($count === 1) {
+            return $items[0];
+        }
+        if ($count === 2) {
+            return $items[0] . ' and ' . $items[1];
+        }
+        $last = array_pop($items);
+        return implode(', ', $items) . ', and ' . $last;
+    }
+
+    private function compact_designer_credit($designer_names) {
+        $designer_names = array_values(array_filter(array_map('sanitize_text_field', (array) $designer_names)));
+        $count = count($designer_names);
+        if ($count <= 2) {
+            return $this->natural_language_list($designer_names);
+        }
+        return $designer_names[0] . ' and collaborators';
+    }
+
+    private function build_source_text_blob($source_context) {
+        $parts = array();
+        foreach (array('title', 'og_title', 'description', 'text_excerpt') as $key) {
+            if (!empty($source_context[$key])) {
+                $parts[] = strtolower((string) $source_context[$key]);
+            }
+        }
+        return implode(' ', $parts);
+    }
+
+    private function filter_supported_fact_bullets($items, $source_text, $keywords) {
+        $items = array_values(array_unique(array_filter(array_map('sanitize_text_field', (array) $items))));
+        $source_text = strtolower((string) $source_text);
+        if ($source_text === '') {
+            return array();
+        }
+
+        $filtered = array();
+        foreach ($items as $item) {
+            $item_lc = strtolower($item);
+            $keep = false;
+
+            if (preg_match('/\\$\\s*\\d|\\d+\\s*(usd|eur|gbp)|\\d+\\s*styles?|\\d+\\s*fonts?/i', $item) && preg_match('/\\$\\s*\\d|\\d+\\s*(usd|eur|gbp)|\\d+\\s*styles?|\\d+\\s*fonts?/i', $source_text)) {
+                $keep = true;
+            }
+
+            if (!$keep) {
+                foreach ((array) $keywords as $keyword) {
+                    $keyword = strtolower((string) $keyword);
+                    if ($keyword !== '' && strpos($item_lc, $keyword) !== false && strpos($source_text, $keyword) !== false) {
+                        $keep = true;
+                        break;
+                    }
+                }
+            }
+
+            if ($keep) {
+                $filtered[] = $item;
+            }
+        }
+
+        return $filtered;
+    }
+
+    private function polish_generator_intro($intro, $font_name, $foundry_name) {
+        $intro = trim(wp_strip_all_tags((string) $intro));
+        if ($intro === '') {
+            return '';
+        }
+
+        $intro = preg_replace('/\\s+Available for purchase on [^.]+\\.?/i', '', $intro);
+        $intro = preg_replace('/\\s+available for purchase on [^.]+\\.?/i', '', $intro);
+        $intro = preg_replace('/\\s+This font is available on [^.]+\\.?/i', '', $intro);
+        $intro = preg_replace('/\\s+making it a comprehensive type system\\.?/i', '.', $intro);
+        $intro = preg_replace('/\\s+It offers\\s+/i', ' It includes ', $intro);
+        $intro = preg_replace('/\\s+/', ' ', (string) $intro);
+        $intro = trim((string) $intro);
+
+        if ($font_name !== '' && $foundry_name !== '' && stripos($intro, $font_name . ' by ' . $foundry_name) !== false) {
+            $intro = preg_replace('/\\bby\\s+' . preg_quote($foundry_name, '/') . '\\b/i', '', $intro);
+            $intro = preg_replace('/\\s+/', ' ', (string) $intro);
+            $intro = trim((string) $intro);
+        }
+
+        return $intro;
     }
 
     private function extract_font_name_from_title($title) {
