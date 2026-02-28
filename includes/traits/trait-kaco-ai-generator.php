@@ -670,13 +670,16 @@ trait KACO_AI_Generator_Trait {
             $parts[] = '<h2>Pricing</h2>' . $this->html_list($pricing_details);
         }
 
-        if (!empty($verified_details)) {
-            $parts[] = '<h2>Verified details</h2>' . $this->html_list($verified_details);
-        }
-
-        $taxonomy_snapshot = $this->build_generated_taxonomy_snapshot($font_style_name, $font_mood_names, $font_use_case_names, $designer_names, $foundry_name);
-        if ($taxonomy_snapshot !== '') {
-            $parts[] = $taxonomy_snapshot;
+        $font_details = $this->build_generated_font_details_section(
+            $font_style_name,
+            $font_mood_names,
+            $font_use_case_names,
+            $designer_names,
+            $foundry_name,
+            $verified_details
+        );
+        if ($font_details !== '') {
+            $parts[] = $font_details;
         }
 
         return trim(implode("\n\n", array_filter($parts)));
@@ -702,29 +705,59 @@ trait KACO_AI_Generator_Trait {
         return $sentence;
     }
 
-    private function build_generated_taxonomy_snapshot($font_style_name, $font_mood_names, $font_use_case_names, $designer_names, $foundry_name) {
+    private function build_generated_font_details_section($font_style_name, $font_mood_names, $font_use_case_names, $designer_names, $foundry_name, $verified_details) {
         $items = array();
+        $seen = array();
+
+        $add_item = function($html, $key) use (&$items, &$seen) {
+            $key = strtolower(trim((string) $key));
+            if ($key === '' || isset($seen[$key])) {
+                return;
+            }
+            $seen[$key] = true;
+            $items[] = $html;
+        };
+
         if ($font_style_name !== '') {
-            $items[] = '<li><strong>Font Style:</strong> ' . esc_html($font_style_name) . '</li>';
+            $add_item('<li><strong>Font Style:</strong> ' . esc_html($font_style_name) . '</li>', 'font style:' . $font_style_name);
         }
         if (!empty($font_mood_names)) {
-            $items[] = '<li><strong>Font Mood:</strong> ' . esc_html($this->natural_language_list($font_mood_names)) . '</li>';
+            $add_item('<li><strong>Font Mood:</strong> ' . esc_html($this->natural_language_list($font_mood_names)) . '</li>', 'font mood:' . implode('|', $font_mood_names));
         }
         if (!empty($font_use_case_names)) {
-            $items[] = '<li><strong>Font Use Case:</strong> ' . esc_html($this->natural_language_list($font_use_case_names)) . '</li>';
+            $add_item('<li><strong>Font Use Case:</strong> ' . esc_html($this->natural_language_list($font_use_case_names)) . '</li>', 'font use case:' . implode('|', $font_use_case_names));
         }
         if (!empty($designer_names)) {
-            $items[] = '<li><strong>Designer:</strong> ' . esc_html($this->natural_language_list($designer_names)) . '</li>';
+            $add_item('<li><strong>Designer:</strong> ' . esc_html($this->natural_language_list($designer_names)) . '</li>', 'designer:' . implode('|', $designer_names));
         }
         if ($foundry_name !== '') {
-            $items[] = '<li><strong>Foundry:</strong> ' . esc_html($foundry_name) . '</li>';
+            $add_item('<li><strong>Foundry:</strong> ' . esc_html($foundry_name) . '</li>', 'foundry:' . $foundry_name);
+        }
+
+        foreach ((array) $verified_details as $detail) {
+            $detail = sanitize_text_field((string) $detail);
+            if ($detail === '') {
+                continue;
+            }
+
+            $detail_key = $this->normalize_font_detail_key($detail);
+            if ($font_style_name !== '' && stripos($detail, $font_style_name) !== false && stripos($detail, 'style') !== false) {
+                continue;
+            }
+            if ($foundry_name !== '' && stripos($detail, $foundry_name) !== false && stripos($detail, 'published') !== false) {
+                continue;
+            }
+            if (!empty($designer_names) && $this->detail_mentions_any_name($detail, $designer_names) && (stripos($detail, 'designed') !== false || stripos($detail, 'designer') !== false)) {
+                continue;
+            }
+            $add_item('<li>' . esc_html($detail) . '</li>', $detail_key);
         }
 
         if (empty($items)) {
             return '';
         }
 
-        return '<h2>Font snapshot</h2><ul>' . implode('', $items) . '</ul>';
+        return '<h2>Font details</h2><ul>' . implode('', $items) . '</ul>';
     }
 
     private function html_list($items) {
@@ -828,6 +861,24 @@ trait KACO_AI_Generator_Trait {
         }
 
         return $intro;
+    }
+
+    private function normalize_font_detail_key($value) {
+        $value = strtolower((string) $value);
+        $value = preg_replace('/[^a-z0-9]+/', ' ', $value);
+        $value = preg_replace('/\s+/', ' ', (string) $value);
+        return trim((string) $value);
+    }
+
+    private function detail_mentions_any_name($detail, $names) {
+        $detail = strtolower((string) $detail);
+        foreach ((array) $names as $name) {
+            $name = strtolower((string) $name);
+            if ($name !== '' && strpos($detail, $name) !== false) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private function extract_font_name_from_title($title) {
