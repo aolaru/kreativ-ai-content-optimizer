@@ -8,8 +8,35 @@ trait KACO_Admin_UI_Trait {
     }
 
     private function render_audit_view() {
+        $last_summary = get_option('kaco_last_audit_summary', array());
+
         echo '<h2>Run audit and create suggestions</h2>';
         echo '<p>This scans posts for category hierarchy gaps, weak internal linking, stale/thin content, duplicate risk, and category description gaps. It creates pending suggestions only.</p>';
+
+        if (!empty($last_summary) && is_array($last_summary)) {
+            echo '<div class="notice notice-info inline"><p><strong>Last audit summary</strong><br/>';
+            echo 'Scanned: ' . (int) ($last_summary['scanned'] ?? 0);
+            echo ' | Matched: ' . (int) ($last_summary['matched'] ?? 0);
+            echo ' | Queued: ' . (int) ($last_summary['queued'] ?? 0);
+            echo ' | Mode: ' . (!empty($last_summary['dry_run']) ? 'Dry Run' : 'Queue');
+            echo ' | Filter: ' . esc_html((string) ($last_summary['issue_filter'] ?? 'all'));
+            echo '</p>';
+            if (!empty($last_summary['reason_totals']) && is_array($last_summary['reason_totals'])) {
+                $reason_bits = array();
+                foreach ($last_summary['reason_totals'] as $label => $count) {
+                    $reason_bits[] = $label . ' (' . (int) $count . ')';
+                }
+                echo '<p><strong>Reasons:</strong> ' . esc_html(implode(' | ', $reason_bits)) . '</p>';
+            }
+            if (!empty($last_summary['top_rows']) && is_array($last_summary['top_rows'])) {
+                echo '<p><strong>Top matches:</strong></p><ul>';
+                foreach ($last_summary['top_rows'] as $row) {
+                    echo '<li>' . esc_html((string) ($row['title'] ?? ('Post #' . (int) ($row['post_id'] ?? 0)))) . ' | priority ' . (int) ($row['priority_score'] ?? 0) . ' | ' . esc_html(implode(', ', (array) ($row['reason_badges'] ?? array()))) . ' | ' . esc_html((string) ($row['current_hierarchy_preview'] ?? '')) . '</li>';
+                }
+                echo '</ul>';
+            }
+            echo '</div>';
+        }
 
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
         wp_nonce_field(self::NONCE_ACTION);
@@ -30,6 +57,24 @@ trait KACO_Admin_UI_Trait {
 
         echo '<tr><th scope="row"><label for="kaco_fonts_only">Fonts posts only</label></th>';
         echo '<td><label><input type="checkbox" id="kaco_fonts_only" name="kaco_fonts_only" value="1" checked="checked" /> yes</label></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_issue_filter">Issue filter</label></th>';
+        echo '<td><select id="kaco_issue_filter" name="kaco_issue_filter">';
+        foreach (array(
+            'all' => 'All issues',
+            'missing_hierarchy' => 'Missing hierarchy',
+            'thin' => 'Thin content',
+            'stale' => 'Stale content',
+            'low_links' => 'Low internal links',
+            'duplicate' => 'Duplicate risk',
+            'category_desc' => 'Category description gaps',
+        ) as $value => $label) {
+            echo '<option value="' . esc_attr($value) . '">' . esc_html($label) . '</option>';
+        }
+        echo '</select></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_dry_run">Dry run only</label></th>';
+        echo '<td><label><input type="checkbox" id="kaco_dry_run" name="kaco_dry_run" value="1" /> yes, summarize matches without queueing suggestions</label></td></tr>';
         echo '</tbody></table>';
 
         submit_button('Run Audit & Queue Suggestions');
@@ -508,6 +553,9 @@ trait KACO_Admin_UI_Trait {
         $hierarchy = !empty($ai['font_category_hierarchy']) ? $ai['font_category_hierarchy'] : array();
 
         return '<strong>Preview</strong><br/>Before: ' . esc_html($before)
+            . '<br/>Priority: ' . (int) ($audit['priority_score'] ?? 0)
+            . '<br/>Reasons: ' . esc_html(!empty($audit['reason_badges']) ? implode(', ', (array) $audit['reason_badges']) : '-')
+            . '<br/>Current hierarchy: ' . esc_html((string) ($audit['current_hierarchy_preview'] ?? '-'))
             . '<br/>Title: ' . esc_html(!empty($ai['title']) ? (string) $ai['title'] : $post->post_title)
             . '<br/>After intro: ' . esc_html($after_intro)
             . '<br/>Visual: ' . esc_html($visual)

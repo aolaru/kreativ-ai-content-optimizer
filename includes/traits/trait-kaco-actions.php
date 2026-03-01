@@ -9,6 +9,8 @@ trait KACO_Actions_Trait {
         $only_missing = !empty($_POST['kaco_only_missing']);
         $scan_all = !empty($_POST['kaco_scan_all']);
         $fonts_only = !empty($_POST['kaco_fonts_only']);
+        $dry_run = !empty($_POST['kaco_dry_run']);
+        $issue_filter = sanitize_key((string) ($_POST['kaco_issue_filter'] ?? 'all'));
 
         $stale_months = (int) get_option('kaco_stale_months', 18);
         $min_internal_links = (int) get_option('kaco_min_internal_links', 4);
@@ -32,13 +34,27 @@ trait KACO_Actions_Trait {
         $audit_index = $this->build_audit_index($post_ids, $category_desc_min_chars);
 
         $queued = 0;
+        $matched = 0;
+        $reason_totals = array();
+        $top_rows = array();
         foreach ($post_ids as $post_id) {
             $audit = $this->audit_post((int) $post_id, $stale_months, $min_internal_links, $min_words, $audit_index);
             if ($only_missing && empty($audit['font_hierarchy_missing'])) {
                 continue;
             }
+            if (!$this->audit_matches_issue_filter($audit, $issue_filter, $min_internal_links)) {
+                continue;
+            }
             if (!$audit['needs_update']) {
                 continue;
+            }
+            $matched++;
+
+            foreach ((array) ($audit['reason_badges'] ?? array()) as $badge) {
+                if (!isset($reason_totals[$badge])) {
+                    $reason_totals[$badge] = 0;
+                }
+                $reason_totals[$badge]++;
             }
 
             $post = get_post((int) $post_id);
@@ -46,7 +62,19 @@ trait KACO_Actions_Trait {
                 continue;
             }
 
+            $top_rows[] = array(
+                'post_id' => (int) $post_id,
+                'title' => (string) $post->post_title,
+                'priority_score' => (int) ($audit['priority_score'] ?? 0),
+                'reason_badges' => (array) ($audit['reason_badges'] ?? array()),
+                'current_hierarchy_preview' => (string) ($audit['current_hierarchy_preview'] ?? ''),
+            );
+
             if ($this->has_pending_suggestion((int) $post_id)) {
+                continue;
+            }
+
+            if ($dry_run) {
                 continue;
             }
 
@@ -72,7 +100,45 @@ trait KACO_Actions_Trait {
 
         wp_reset_postdata();
         $scanned = count($post_ids);
-        $this->redirect_with_notice("Audit complete. Scanned {$scanned} posts. Queued {$queued} suggestions.", 'suggestions');
+        usort($top_rows, function($a, $b) {
+            return ((int) ($b['priority_score'] ?? 0)) <=> ((int) ($a['priority_score'] ?? 0));
+        });
+        $summary = array(
+            'ran_at' => current_time('mysql', true),
+            'post_type' => $post_type,
+            'scanned' => $scanned,
+            'matched' => $matched,
+            'queued' => $queued,
+            'dry_run' => $dry_run,
+            'issue_filter' => $issue_filter,
+            'reason_totals' => $reason_totals,
+            'top_rows' => array_slice($top_rows, 0, 8),
+        );
+        update_option('kaco_last_audit_summary', $summary, false);
+
+        $message = $dry_run
+            ? "Dry-run audit complete. Scanned {$scanned} posts. Matched {$matched} posts. Queued 0 suggestions."
+            : "Audit complete. Scanned {$scanned} posts. Matched {$matched} posts. Queued {$queued} suggestions.";
+        $this->redirect_with_notice($message, 'audit');
+    }
+
+    private function audit_matches_issue_filter($audit, $issue_filter, $min_internal_links) {
+        switch ($issue_filter) {
+            case 'missing_hierarchy':
+                return !empty($audit['font_hierarchy_missing']);
+            case 'thin':
+                return !empty($audit['thin_content']);
+            case 'stale':
+                return !empty($audit['stale']);
+            case 'low_links':
+                return (int) ($audit['internal_links'] ?? 0) < (int) $min_internal_links;
+            case 'duplicate':
+                return !empty($audit['duplicate_candidates']);
+            case 'category_desc':
+                return !empty($audit['category_desc_gaps']);
+            default:
+                return true;
+        }
     }
 
     public function handle_generate_ai_batch() {

@@ -24,6 +24,9 @@ trait KACO_Content_Trait {
         $font_category_hierarchy = $this->analyze_font_category_hierarchy($post_id);
         $font_hierarchy_missing = !empty($font_category_hierarchy['missing']) ? (array) $font_category_hierarchy['missing'] : array();
         $suggested_internal_links = $this->suggest_related_links($post_id, $font_category_hierarchy);
+        $reason_badges = $this->build_audit_reason_badges($internal_links, $min_internal_links, $stale, $thin_content, $duplicate_candidates, $category_desc_gaps, $font_hierarchy_missing);
+        $priority_score = $this->calculate_audit_priority_score($internal_links, $min_internal_links, $word_count, $min_words, $stale, $duplicate_candidates, $category_desc_gaps, $font_hierarchy_missing);
+        $current_hierarchy_preview = $this->build_current_hierarchy_preview($font_category_hierarchy);
 
         return array(
             'internal_links' => $internal_links,
@@ -35,8 +38,98 @@ trait KACO_Content_Trait {
             'font_category_hierarchy' => $font_category_hierarchy,
             'font_hierarchy_missing' => $font_hierarchy_missing,
             'suggested_internal_links' => $suggested_internal_links,
+            'reason_badges' => $reason_badges,
+            'priority_score' => $priority_score,
+            'current_hierarchy_preview' => $current_hierarchy_preview,
             'needs_update' => $internal_links < $min_internal_links || $stale || $thin_content || !empty($duplicate_candidates) || !empty($category_desc_gaps) || !empty($font_hierarchy_missing),
         );
+    }
+
+    private function build_audit_reason_badges($internal_links, $min_internal_links, $stale, $thin_content, $duplicate_candidates, $category_desc_gaps, $font_hierarchy_missing) {
+        $badges = array();
+        if (!empty($font_hierarchy_missing)) {
+            foreach ((array) $font_hierarchy_missing as $item) {
+                $label = $this->normalize_audit_badge_label((string) $item);
+                if ($label !== '') {
+                    $badges[] = $label;
+                }
+            }
+        }
+        if ($thin_content) {
+            $badges[] = 'Thin Content';
+        }
+        if ($stale) {
+            $badges[] = 'Stale';
+        }
+        if ((int) $internal_links < (int) $min_internal_links) {
+            $badges[] = 'Low Internal Links';
+        }
+        if (!empty($duplicate_candidates)) {
+            $badges[] = 'Duplicate Risk';
+        }
+        if (!empty($category_desc_gaps)) {
+            $badges[] = 'Category Gaps';
+        }
+        return array_values(array_unique($badges));
+    }
+
+    private function normalize_audit_badge_label($value) {
+        $value = trim((string) $value);
+        if ($value === '') {
+            return '';
+        }
+        $map = array(
+            'designer' => 'Missing Designer',
+            'foundry' => 'Missing Foundry',
+            'font_style' => 'Missing Font Style',
+            'font_mood' => 'Missing Font Mood',
+            'font_use_case' => 'Missing Font Use Case',
+            'font_style_invalid' => 'Invalid Font Style',
+            'font_mood_invalid' => 'Invalid Font Mood',
+            'font_use_case_invalid' => 'Invalid Font Use Case',
+            'designer parent category missing' => 'Designer Parent Missing',
+            'foundry parent category missing' => 'Foundry Parent Missing',
+            'font_style parent category missing' => 'Font Style Parent Missing',
+            'font_mood parent category missing' => 'Font Mood Parent Missing',
+            'font_use_case parent category missing' => 'Font Use Case Parent Missing',
+        );
+        if (isset($map[$value])) {
+            return $map[$value];
+        }
+        return ucwords(str_replace(array('_', '-'), ' ', $value));
+    }
+
+    private function calculate_audit_priority_score($internal_links, $min_internal_links, $word_count, $min_words, $stale, $duplicate_candidates, $category_desc_gaps, $font_hierarchy_missing) {
+        $score = 0;
+        $score += count((array) $font_hierarchy_missing) * 20;
+        $score += count((array) $category_desc_gaps) * 8;
+        $score += count((array) $duplicate_candidates) > 0 ? 12 : 0;
+        $score += $stale ? 15 : 0;
+        $score += max(0, ((int) $min_internal_links - (int) $internal_links)) * 4;
+        $score += max(0, ((int) $min_words - (int) $word_count) / 50) * 5;
+        return (int) min(100, round($score));
+    }
+
+    private function build_current_hierarchy_preview($font_category_hierarchy) {
+        $assigned = !empty($font_category_hierarchy['assigned']) && is_array($font_category_hierarchy['assigned']) ? $font_category_hierarchy['assigned'] : array();
+        $map = array(
+            'designer' => 'Designers',
+            'foundry' => 'Foundry',
+            'font_style' => 'Font Style',
+            'font_mood' => 'Font Mood',
+            'font_use_case' => 'Font Use Case',
+        );
+        $parts = array();
+        foreach ($map as $key => $label) {
+            $items = array();
+            foreach ((array) ($assigned[$key] ?? array()) as $term) {
+                if (!empty($term['name'])) {
+                    $items[] = (string) $term['name'];
+                }
+            }
+            $parts[] = $label . ': ' . (!empty($items) ? implode(', ', $items) : '-');
+        }
+        return implode(' | ', $parts);
     }
 
     private function build_suggested_appendix($content, $template, $post_id) {
