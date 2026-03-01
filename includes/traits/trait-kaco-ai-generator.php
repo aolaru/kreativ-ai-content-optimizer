@@ -223,13 +223,17 @@ trait KACO_AI_Generator_Trait {
 
         $created = 0;
         $skipped = 0;
+        $errors = array();
         foreach ($previews as $preview) {
             if (empty($preview['create'])) {
                 continue;
             }
 
             $post_id = $this->create_generated_draft_from_preview($preview);
-            if ($post_id > 0) {
+            if (is_wp_error($post_id)) {
+                $errors[] = $post_id->get_error_message();
+                $skipped++;
+            } elseif ($post_id > 0) {
                 $created++;
             } else {
                 $skipped++;
@@ -240,6 +244,9 @@ trait KACO_AI_Generator_Trait {
         $notice = $created . ' draft(s) created.';
         if ($skipped > 0) {
             $notice .= ' ' . $skipped . ' preview(s) skipped, usually because the source URL already exists or required content was missing.';
+        }
+        if (!empty($errors)) {
+            $notice .= ' Last error: ' . $errors[0];
         }
         $this->redirect_with_notice($notice, 'generator');
     }
@@ -1104,12 +1111,12 @@ trait KACO_AI_Generator_Trait {
         $content = wp_kses_post((string) ($preview['content'] ?? ''));
         $source_url = esc_url_raw((string) ($preview['url'] ?? ''));
         if ($title === '' || $content === '') {
-            return 0;
+            return new WP_Error('missing_preview_fields', 'Generated preview is missing a title or content.');
         }
 
         $existing_post_id = $this->find_existing_generated_post_by_source_url($source_url);
         if ($existing_post_id > 0) {
-            return 0;
+            return new WP_Error('duplicate_source_url', 'A post with this source URL already exists.');
         }
 
         $tags = array();
@@ -1134,7 +1141,7 @@ trait KACO_AI_Generator_Trait {
         ), true);
 
         if (is_wp_error($post_id) || !$post_id) {
-            return 0;
+            return is_wp_error($post_id) ? $post_id : new WP_Error('draft_insert_failed', 'Draft creation failed.');
         }
 
         update_post_meta((int) $post_id, '_kaco_source_url', $source_url);
@@ -1154,10 +1161,13 @@ trait KACO_AI_Generator_Trait {
                 if ($local_image_url) {
                     $updated_content = $this->inject_local_image_into_content($content, $image_url, $local_image_url, $title);
                     if ($updated_content !== $content) {
-                        wp_update_post(array(
+                        $image_update = wp_update_post(array(
                             'ID' => (int) $post_id,
                             'post_content' => $updated_content,
-                        ));
+                        ), true);
+                        if (is_wp_error($image_update) || (int) $image_update <= 0) {
+                            return is_wp_error($image_update) ? $image_update : new WP_Error('image_content_update_failed', 'Draft image content update failed.');
+                        }
                     }
                 }
             }
@@ -1168,10 +1178,13 @@ trait KACO_AI_Generator_Trait {
             $relinked_content = $this->replace_generator_lead_paragraph($content, $preview, $linked_terms);
             $relinked_content = $this->relink_font_mentions_to_internal_categories($relinked_content, $linked_terms);
             if ($relinked_content !== $content) {
-                wp_update_post(array(
+                $relink_update = wp_update_post(array(
                     'ID' => (int) $post_id,
                     'post_content' => $relinked_content,
-                ));
+                ), true);
+                if (is_wp_error($relink_update) || (int) $relink_update <= 0) {
+                    return is_wp_error($relink_update) ? $relink_update : new WP_Error('relink_update_failed', 'Draft relink update failed.');
+                }
             }
         }
 

@@ -579,12 +579,17 @@ trait KACO_Content_Trait {
                 }
 
                 if ($term && !is_wp_error($term)) {
-                    wp_update_term((int) $term->term_id, $taxonomy, array(
+                    $updated = wp_update_term((int) $term->term_id, $taxonomy, array(
                         'description' => $description,
                     ));
+                    if (is_wp_error($updated)) {
+                        return $updated;
+                    }
                 }
             }
         }
+
+        return true;
     }
 
     private function apply_font_category_hierarchy($post_id, $hierarchy) {

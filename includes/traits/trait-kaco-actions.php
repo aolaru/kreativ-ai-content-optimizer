@@ -122,14 +122,14 @@ trait KACO_Actions_Trait {
             if ($bulk_action === 'generate_ai') {
                 $ok = $row['status'] === 'pending' ? $this->generate_ai_for_row($row) : false;
             } elseif ($bulk_action === 'apply') {
-                $ok = $row['status'] === 'pending' ? $this->apply_suggestion_row($row) : false;
+                $ok = in_array($row['status'], array('pending', 'needs_review'), true) ? $this->apply_suggestion_row($row) : false;
             } elseif ($bulk_action === 'reject') {
-                $ok = $row['status'] === 'pending' ? $this->reject_suggestion_row($row) : false;
+                $ok = in_array($row['status'], array('pending', 'needs_review'), true) ? $this->reject_suggestion_row($row) : false;
             } else {
                 $ok = false;
             }
 
-            if ($ok) {
+            if ($ok === true) {
                 $done++;
             } else {
                 $failed++;
@@ -270,6 +270,13 @@ trait KACO_Actions_Trait {
             $this->redirect_with_notice('Category draft not found.', 'categories');
         }
 
+        $term_update = wp_update_term($term_id, 'category', array(
+            'description' => wp_kses_post((string) $draft['description']),
+        ));
+        if (is_wp_error($term_update)) {
+            $this->redirect_with_notice('Category description apply failed: ' . $term_update->get_error_message(), 'categories');
+        }
+
         $history = $this->get_term_history();
         $history[$term_id] = array(
             'previous_description' => (string) $term->description,
@@ -277,10 +284,6 @@ trait KACO_Actions_Trait {
             'updated_at' => current_time('mysql', true),
         );
         update_option('kaco_term_history', $history, false);
-
-        wp_update_term($term_id, 'category', array(
-            'description' => wp_kses_post((string) $draft['description']),
-        ));
 
         unset($suggestions[$term_id]);
         update_option('kaco_term_suggestions', $suggestions, false);
@@ -413,12 +416,15 @@ trait KACO_Actions_Trait {
         $suggestion_id = (int) ($_POST['suggestion_id'] ?? 0);
         $row = $this->get_suggestion($suggestion_id);
 
-        if (!$row || $row['status'] !== 'pending') {
-            $this->redirect_with_notice('Suggestion not found or not pending.', 'suggestions');
+        if (!$row || !in_array($row['status'], array('pending', 'needs_review'), true)) {
+            $this->redirect_with_notice('Suggestion not found or not applyable.', 'suggestions');
         }
 
         $ok = $this->apply_suggestion_row($row);
-        if (!$ok) {
+        if (is_wp_error($ok)) {
+            $this->redirect_with_notice('Suggestion could not be applied: ' . $ok->get_error_message(), 'suggestions');
+        }
+        if ($ok !== true) {
             $this->redirect_with_notice('Suggestion could not be applied. Check AI confidence or payload completeness.', 'suggestions');
         }
 
@@ -430,14 +436,14 @@ trait KACO_Actions_Trait {
 
         $post = get_post((int) $row['post_id']);
         if (!$post) {
-            return false;
+            return new WP_Error('missing_post', 'The target post no longer exists.');
         }
 
         $suggestion = json_decode($row['suggestion_data'], true);
         $append = isset($suggestion['append_template']) ? (string) $suggestion['append_template'] : '';
         $ai = isset($suggestion['ai']) && is_array($suggestion['ai']) ? $suggestion['ai'] : array();
         if (!empty($ai) && !$this->passes_ai_confidence($ai)) {
-            return false;
+            return new WP_Error('low_confidence', 'AI confidence is below the configured threshold.');
         }
 
         $new_content = (string) $post->post_content;
@@ -464,7 +470,10 @@ trait KACO_Actions_Trait {
         }
 
         if (!empty($ai['term_descriptions']) && is_array($ai['term_descriptions'])) {
-            $this->apply_term_description_updates($ai['term_descriptions']);
+            $term_update_result = $this->apply_term_description_updates($ai['term_descriptions']);
+            if (is_wp_error($term_update_result)) {
+                return $term_update_result;
+            }
         }
 
         $font_links_block = $this->build_font_category_links_block($font_link_terms);
@@ -489,7 +498,10 @@ trait KACO_Actions_Trait {
             $post_update['post_excerpt'] = (string) $ai['excerpt'];
         }
 
-        wp_update_post($post_update);
+        $updated_post_id = wp_update_post($post_update, true);
+        if (is_wp_error($updated_post_id) || (int) $updated_post_id <= 0) {
+            return is_wp_error($updated_post_id) ? $updated_post_id : new WP_Error('post_update_failed', 'Post update failed.');
+        }
 
         $this->update_suggestion_status($suggestion_id, 'applied', get_current_user_id());
         return true;
@@ -510,7 +522,7 @@ trait KACO_Actions_Trait {
     }
 
     private function reject_suggestion_row($row) {
-        if (!$row || $row['status'] !== 'pending') {
+        if (!$row || !in_array($row['status'], array('pending', 'needs_review'), true)) {
             return false;
         }
         $this->update_suggestion_status((int) $row['id'], 'rejected', get_current_user_id());
