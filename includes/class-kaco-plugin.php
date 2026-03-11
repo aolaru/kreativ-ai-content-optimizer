@@ -40,6 +40,7 @@ final class KACO_Plugin {
         add_action('admin_post_kaco_bulk_suggestions', array($this, 'handle_bulk_suggestions'));
         add_action('admin_post_kaco_export_suggestions_csv', array($this, 'handle_export_suggestions_csv'));
         add_action('admin_post_kaco_import_suggestions_csv', array($this, 'handle_import_suggestions_csv'));
+        add_action('admin_post_kaco_approve_suggestion', array($this, 'handle_approve_suggestion'));
         add_action('admin_post_kaco_apply_suggestion', array($this, 'handle_apply_suggestion'));
         add_action('admin_post_kaco_reject_suggestion', array($this, 'handle_reject_suggestion'));
         add_action('admin_post_kaco_rollback_suggestion', array($this, 'handle_rollback_suggestion'));

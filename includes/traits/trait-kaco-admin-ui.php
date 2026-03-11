@@ -398,6 +398,8 @@ trait KACO_Admin_UI_Trait {
         $where = '1=1';
         if ($filter === 'needs_review') {
             $where = "status = 'needs_review'";
+        } elseif ($filter === 'approved') {
+            $where = "status = 'approved'";
         } elseif ($filter === 'pending') {
             $where = "status = 'pending'";
         } elseif ($filter === 'missing_designer') {
@@ -416,7 +418,7 @@ trait KACO_Admin_UI_Trait {
         echo '<h2>Suggestions queue</h2>';
         echo '<p>All changes are pending by default. Apply creates a post revision automatically.</p>';
         echo '<p>';
-        foreach (array('all' => 'All', 'pending' => 'Pending', 'needs_review' => 'Needs Review', 'missing_designer' => 'Missing Designer', 'missing_foundry' => 'Missing Foundry', 'missing_font_style' => 'Missing Font Style', 'missing_font_mood' => 'Missing Font Mood', 'missing_font_use_case' => 'Missing Font Use Case') as $key => $label) {
+        foreach (array('all' => 'All', 'pending' => 'Pending', 'needs_review' => 'Needs Review', 'approved' => 'Approved', 'missing_designer' => 'Missing Designer', 'missing_foundry' => 'Missing Foundry', 'missing_font_style' => 'Missing Font Style', 'missing_font_mood' => 'Missing Font Mood', 'missing_font_use_case' => 'Missing Font Use Case') as $key => $label) {
             $url = admin_url('admin.php?page=kaco-dashboard&view=suggestions' . ($key !== 'all' ? '&filter=' . $key : ''));
             echo '<a href="' . esc_url($url) . '" style="margin-right:10px;">' . esc_html($label) . '</a>';
         }
@@ -452,6 +454,7 @@ trait KACO_Admin_UI_Trait {
         echo '<p><select name="kaco_bulk_action">';
         echo '<option value="">Bulk action</option>';
         echo '<option value="generate_ai">Generate AI</option>';
+        echo '<option value="approve">Approve</option>';
         echo '<option value="apply">Apply</option>';
         echo '<option value="reject">Reject</option>';
         echo '</select> ';
@@ -492,6 +495,11 @@ trait KACO_Admin_UI_Trait {
 
             if ($row['status'] === 'pending' || $row['status'] === 'needs_review') {
                 $this->render_action_form('kaco_generate_ai_suggestion', 'Generate AI', (int) $row['id']);
+                $this->render_action_form('kaco_approve_suggestion', 'Approve', (int) $row['id']);
+                $this->render_action_form('kaco_reject_suggestion', 'Reject', (int) $row['id']);
+            }
+
+            if ($row['status'] === 'approved') {
                 if (!$below_threshold) {
                     $this->render_action_form('kaco_apply_suggestion', 'Apply', (int) $row['id']);
                 }
@@ -546,13 +554,47 @@ trait KACO_Admin_UI_Trait {
         if (!$post) {
             return '<em>Preview unavailable.</em>';
         }
-        $before = wp_trim_words(wp_strip_all_tags((string) $post->post_content), 30, '...');
+        $before_content = (string) $post->post_content;
+        $before = wp_trim_words(wp_strip_all_tags($before_content), 30, '...');
         $after_intro = !empty($ai['refreshed_intro']) ? wp_trim_words(wp_strip_all_tags((string) $ai['refreshed_intro']), 30, '...') : '[no AI intro]';
         $visual = !empty($ai['visual_analysis']) ? wp_trim_words(wp_strip_all_tags((string) $ai['visual_analysis']), 24, '...') : '[no visual analysis]';
         $excerpt = !empty($ai['excerpt']) ? wp_trim_words((string) $ai['excerpt'], 20, '...') : '[no AI excerpt]';
         $hierarchy = !empty($ai['font_category_hierarchy']) ? $ai['font_category_hierarchy'] : array();
+        $after_content = $before_content;
+        $content_diff = '[AI not generated yet]';
+        $title_diff = '[No proposed title change]';
+        $excerpt_diff = '[No proposed excerpt change]';
+        $category_diff = $this->build_hierarchy_assignment_diff($audit, $hierarchy);
 
-        return '<strong>Preview</strong><br/>Before: ' . esc_html($before)
+        if (!empty($ai)) {
+            $template = (string) get_option('kaco_update_template', '');
+            $rewrite_mode = $this->sanitize_rewrite_mode((string) get_option('kaco_rewrite_mode', 'replace_body'));
+            $context = array(
+                'ai_intro' => (string) ($ai['refreshed_intro'] ?? ($ai['content_append'] ?? '')),
+                'visual_analysis' => (string) ($ai['visual_analysis'] ?? ''),
+                'best_for' => !empty($ai['best_for']) ? (array) $ai['best_for'] : array(),
+                'pairing_notes' => !empty($ai['pairing_notes']) ? (array) $ai['pairing_notes'] : array(),
+                'font_features' => !empty($ai['font_features']) ? (array) $ai['font_features'] : array(),
+                'whats_included' => !empty($ai['whats_included']) ? (array) $ai['whats_included'] : array(),
+                'pricing_details' => !empty($ai['pricing_details']) ? (array) $ai['pricing_details'] : array(),
+                'verified_details' => !empty($ai['verified_details']) ? (array) $ai['verified_details'] : array(),
+                'related_links' => !empty($ai['internal_links']) ? $ai['internal_links'] : ($suggestion['suggested_internal_links'] ?? array()),
+            );
+            $rendered_template = $this->render_template($template, (int) $post->ID, $context);
+            $after_content = $this->rewrite_existing_post_content($before_content, $rendered_template, (string) ($suggestion['append_template'] ?? ''), $rewrite_mode);
+            $content_diff = wp_text_diff(wp_strip_all_tags($before_content), wp_strip_all_tags($after_content), array('show_split_view' => true)) ?: '[No content diff]';
+
+            $proposed_title = $this->sanitize_regenerated_title((string) ($ai['title'] ?? ''), (string) $post->post_title);
+            if ($proposed_title !== '' && $proposed_title !== (string) $post->post_title) {
+                $title_diff = wp_text_diff((string) $post->post_title, $proposed_title, array('show_split_view' => true)) ?: '[No title diff]';
+            }
+
+            if (!empty($ai['excerpt']) && (string) $ai['excerpt'] !== (string) $post->post_excerpt) {
+                $excerpt_diff = wp_text_diff((string) $post->post_excerpt, (string) $ai['excerpt'], array('show_split_view' => true)) ?: '[No excerpt diff]';
+            }
+        }
+
+        $out = '<strong>Preview</strong><br/>Before: ' . esc_html($before)
             . '<br/>Priority: ' . (int) ($audit['priority_score'] ?? 0)
             . '<br/>Reasons: ' . esc_html(!empty($audit['reason_badges']) ? implode(', ', (array) $audit['reason_badges']) : '-')
             . '<br/>Current hierarchy: ' . esc_html((string) ($audit['current_hierarchy_preview'] ?? '-'))
@@ -565,6 +607,42 @@ trait KACO_Admin_UI_Trait {
             . ' | Font Style: ' . esc_html((string) ($hierarchy['font_style_name'] ?? '-'))
             . ' | Font Moods: ' . esc_html(!empty($hierarchy['font_mood_names']) ? implode(', ', (array) $hierarchy['font_mood_names']) : '-')
             . ' | Font Use Cases: ' . esc_html(!empty($hierarchy['font_use_case_names']) ? implode(', ', (array) $hierarchy['font_use_case_names']) : '-');
+        $out .= '<details style="margin-top:8px;"><summary><strong>Content Diff</strong></summary>' . wp_kses_post($content_diff) . '</details>';
+        $out .= '<details style="margin-top:8px;"><summary><strong>Title Diff</strong></summary>' . wp_kses_post($title_diff) . '</details>';
+        $out .= '<details style="margin-top:8px;"><summary><strong>Excerpt Diff</strong></summary>' . wp_kses_post($excerpt_diff) . '</details>';
+        $out .= '<details style="margin-top:8px;"><summary><strong>Category Assignment Diff</strong></summary>' . esc_html($category_diff) . '</details>';
+        return $out;
+    }
+
+    private function build_hierarchy_assignment_diff($audit, $proposed_hierarchy) {
+        $current_assigned = !empty($audit['font_category_hierarchy']['assigned']) ? (array) $audit['font_category_hierarchy']['assigned'] : array();
+        $keys = array(
+            'designer' => 'designer_names',
+            'foundry' => 'foundry_name',
+            'font_style' => 'font_style_name',
+            'font_mood' => 'font_mood_names',
+            'font_use_case' => 'font_use_case_names',
+        );
+        $parts = array();
+        foreach ($keys as $current_key => $proposed_key) {
+            $current_values = array();
+            foreach ((array) ($current_assigned[$current_key] ?? array()) as $item) {
+                if (!empty($item['name'])) {
+                    $current_values[] = (string) $item['name'];
+                }
+            }
+
+            $proposed_raw = $proposed_hierarchy[$proposed_key] ?? array();
+            if (!is_array($proposed_raw)) {
+                $proposed_raw = $proposed_raw !== '' ? array((string) $proposed_raw) : array();
+            }
+            $proposed_values = array_values(array_filter(array_map('sanitize_text_field', (array) $proposed_raw)));
+
+            $label = ucwords(str_replace('_', ' ', $current_key));
+            $parts[] = $label . ' current: [' . (!empty($current_values) ? implode(', ', $current_values) : '-') . '] -> proposed: [' . (!empty($proposed_values) ? implode(', ', $proposed_values) : '-') . ']';
+        }
+
+        return implode(' | ', $parts);
     }
 
     private function render_settings_view() {

@@ -186,9 +186,11 @@ trait KACO_Actions_Trait {
             }
 
             if ($bulk_action === 'generate_ai') {
-                $ok = $row['status'] === 'pending' ? $this->generate_ai_for_row($row) : false;
+                $ok = in_array($row['status'], array('pending', 'needs_review', 'approved'), true) ? $this->generate_ai_for_row($row) : false;
+            } elseif ($bulk_action === 'approve') {
+                $ok = in_array($row['status'], array('pending', 'needs_review'), true) ? $this->approve_suggestion_row($row) : false;
             } elseif ($bulk_action === 'apply') {
-                $ok = in_array($row['status'], array('pending', 'needs_review'), true) ? $this->apply_suggestion_row($row) : false;
+                $ok = $row['status'] === 'approved' ? $this->apply_suggestion_row($row) : false;
             } elseif ($bulk_action === 'reject') {
                 $ok = in_array($row['status'], array('pending', 'needs_review'), true) ? $this->reject_suggestion_row($row) : false;
             } else {
@@ -482,8 +484,8 @@ trait KACO_Actions_Trait {
         $suggestion_id = (int) ($_POST['suggestion_id'] ?? 0);
         $row = $this->get_suggestion($suggestion_id);
 
-        if (!$row || !in_array($row['status'], array('pending', 'needs_review'), true)) {
-            $this->redirect_with_notice('Suggestion not found or not applyable.', 'suggestions');
+        if (!$row || $row['status'] !== 'approved') {
+            $this->redirect_with_notice('Suggestion must be approved before apply.', 'suggestions');
         }
 
         $ok = $this->apply_suggestion_row($row);
@@ -570,6 +572,31 @@ trait KACO_Actions_Trait {
         }
 
         $this->update_suggestion_status($suggestion_id, 'applied', get_current_user_id());
+        return true;
+    }
+
+    public function handle_approve_suggestion() {
+        $this->require_admin_request();
+
+        $suggestion_id = (int) ($_POST['suggestion_id'] ?? 0);
+        $row = $this->get_suggestion($suggestion_id);
+        if (!$row || !in_array($row['status'], array('pending', 'needs_review'), true)) {
+            $this->redirect_with_notice('Suggestion not found or not approvable.', 'suggestions');
+        }
+
+        $ok = $this->approve_suggestion_row($row);
+        if (!$ok) {
+            $this->redirect_with_notice('Suggestion could not be approved.', 'suggestions');
+        }
+
+        $this->redirect_with_notice("Suggestion #{$suggestion_id} approved.", 'suggestions');
+    }
+
+    private function approve_suggestion_row($row) {
+        if (!$row || !in_array($row['status'], array('pending', 'needs_review'), true)) {
+            return false;
+        }
+        $this->update_suggestion_status((int) $row['id'], 'approved', get_current_user_id());
         return true;
     }
 
