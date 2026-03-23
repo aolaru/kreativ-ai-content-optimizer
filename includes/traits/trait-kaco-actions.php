@@ -4,19 +4,73 @@ trait KACO_Actions_Trait {
     public function handle_run_audit() {
         $this->require_admin_request();
 
-        $post_type = sanitize_key($_POST['kaco_post_type'] ?? 'post');
-        $limit = min(500, max(1, (int) ($_POST['kaco_limit'] ?? 100)));
-        $only_missing = !empty($_POST['kaco_only_missing']);
-        $scan_all = !empty($_POST['kaco_scan_all']);
-        $fonts_only = !empty($_POST['kaco_fonts_only']);
-        $dry_run = !empty($_POST['kaco_dry_run']);
-        $issue_filter = sanitize_key((string) ($_POST['kaco_issue_filter'] ?? 'all'));
+        $summary = $this->run_audit_job(array(
+            'post_type' => sanitize_key($_POST['kaco_post_type'] ?? 'post'),
+            'limit' => min(500, max(1, (int) ($_POST['kaco_limit'] ?? 100))),
+            'only_missing' => !empty($_POST['kaco_only_missing']),
+            'scan_all' => !empty($_POST['kaco_scan_all']),
+            'fonts_only' => !empty($_POST['kaco_fonts_only']),
+            'dry_run' => !empty($_POST['kaco_dry_run']),
+            'issue_filter' => sanitize_key((string) ($_POST['kaco_issue_filter'] ?? 'all')),
+        ));
+        update_option('kaco_last_audit_summary', $summary, false);
+
+        $message = !empty($summary['dry_run'])
+            ? "Dry-run audit complete. Scanned {$summary['scanned']} posts. Matched {$summary['matched']} posts. Queued 0 suggestions."
+            : "Audit complete. Scanned {$summary['scanned']} posts. Matched {$summary['matched']} posts. Queued {$summary['queued']} suggestions.";
+        $this->redirect_with_notice($message, 'audit');
+    }
+
+    public function handle_automation_event() {
+        if (get_option('kaco_automation_enabled', '0') !== '1') {
+            return;
+        }
+
+        $summary = $this->run_audit_job(array(
+            'post_type' => sanitize_key((string) get_option('kaco_automation_post_type', 'post')),
+            'limit' => min(500, max(1, (int) get_option('kaco_automation_scan_limit', 50))),
+            'only_missing' => false,
+            'scan_all' => false,
+            'fonts_only' => get_option('kaco_automation_fonts_only', '1') === '1',
+            'dry_run' => false,
+            'issue_filter' => sanitize_key((string) get_option('kaco_automation_issue_filter', 'all')),
+        ));
+
+        $processed = array(
+            'generated' => 0,
+            'approved' => 0,
+            'applied' => 0,
+            'failed' => 0,
+        );
+        if (!empty($summary['queued_ids']) && is_array($summary['queued_ids'])) {
+            $processed = $this->process_automation_suggestions($summary['queued_ids']);
+        }
+
+        $summary['automation'] = array(
+            'generated' => (int) ($processed['generated'] ?? 0),
+            'approved' => (int) ($processed['approved'] ?? 0),
+            'applied' => (int) ($processed['applied'] ?? 0),
+            'failed' => (int) ($processed['failed'] ?? 0),
+        );
+        $summary['generator_inbox'] = $this->process_generator_url_inbox();
+        update_option('kaco_last_audit_summary', $summary, false);
+        update_option('kaco_automation_last_run', $summary, false);
+    }
+
+    private function run_audit_job($args) {
+        $post_type = sanitize_key((string) ($args['post_type'] ?? 'post'));
+        $limit = min(500, max(1, (int) ($args['limit'] ?? 100)));
+        $only_missing = !empty($args['only_missing']);
+        $scan_all = !empty($args['scan_all']);
+        $fonts_only = !empty($args['fonts_only']);
+        $dry_run = !empty($args['dry_run']);
+        $issue_filter = sanitize_key((string) ($args['issue_filter'] ?? 'all'));
 
         $stale_months = (int) get_option('kaco_stale_months', 18);
         $min_internal_links = (int) get_option('kaco_min_internal_links', 4);
         $min_words = (int) get_option('kaco_min_words', 250);
         $category_desc_min_chars = (int) get_option('kaco_category_desc_min_chars', 120);
-        $template = get_option('kaco_update_template', '');
+        $template = (string) get_option('kaco_update_template', '');
 
         $query = new WP_Query(array(
             'post_type' => $post_type,
@@ -35,6 +89,7 @@ trait KACO_Actions_Trait {
 
         $queued = 0;
         $matched = 0;
+        $queued_ids = array();
         $reason_totals = array();
         $top_rows = array();
         foreach ($post_ids as $post_id) {
@@ -70,7 +125,7 @@ trait KACO_Actions_Trait {
                 'current_hierarchy_preview' => (string) ($audit['current_hierarchy_preview'] ?? ''),
             );
 
-            if ($this->has_pending_suggestion((int) $post_id)) {
+            if ($this->has_active_suggestion((int) $post_id)) {
                 continue;
             }
 
@@ -94,32 +149,30 @@ trait KACO_Actions_Trait {
                 'created_by_rule_engine' => true,
             );
 
-            $this->insert_suggestion((int) $post_id, $audit, $suggestion, $snapshot);
-            $queued++;
+            $inserted_id = $this->insert_suggestion((int) $post_id, $audit, $suggestion, $snapshot);
+            if ($inserted_id > 0) {
+                $queued++;
+                $queued_ids[] = (int) $inserted_id;
+            }
         }
 
         wp_reset_postdata();
-        $scanned = count($post_ids);
         usort($top_rows, function($a, $b) {
             return ((int) ($b['priority_score'] ?? 0)) <=> ((int) ($a['priority_score'] ?? 0));
         });
-        $summary = array(
+
+        return array(
             'ran_at' => current_time('mysql', true),
             'post_type' => $post_type,
-            'scanned' => $scanned,
+            'scanned' => count($post_ids),
             'matched' => $matched,
             'queued' => $queued,
+            'queued_ids' => $queued_ids,
             'dry_run' => $dry_run,
             'issue_filter' => $issue_filter,
             'reason_totals' => $reason_totals,
             'top_rows' => array_slice($top_rows, 0, 8),
         );
-        update_option('kaco_last_audit_summary', $summary, false);
-
-        $message = $dry_run
-            ? "Dry-run audit complete. Scanned {$scanned} posts. Matched {$matched} posts. Queued 0 suggestions."
-            : "Audit complete. Scanned {$scanned} posts. Matched {$matched} posts. Queued {$queued} suggestions.";
-        $this->redirect_with_notice($message, 'audit');
     }
 
     private function audit_matches_issue_filter($audit, $issue_filter, $min_internal_links) {
@@ -286,8 +339,8 @@ trait KACO_Actions_Trait {
         $suggestion_id = (int) ($_POST['suggestion_id'] ?? 0);
         $row = $this->get_suggestion($suggestion_id);
 
-        if (!$row || $row['status'] !== 'pending') {
-            $this->redirect_with_notice('Suggestion not found or not pending.', 'suggestions');
+        if (!$row || !in_array($row['status'], array('pending', 'needs_review', 'approved'), true)) {
+            $this->redirect_with_notice('Suggestion not found or not eligible for AI generation.', 'suggestions');
         }
 
         $ok = $this->generate_ai_for_row($row);
@@ -672,11 +725,39 @@ trait KACO_Actions_Trait {
         return is_array($value) ? $value : array();
     }
 
+    private function get_automation_logs() {
+        $value = get_option('kaco_automation_logs', array());
+        return is_array($value) ? array_values($value) : array();
+    }
+
+    private function set_automation_logs($logs) {
+        $logs = is_array($logs) ? array_values($logs) : array();
+        update_option('kaco_automation_logs', array_slice($logs, 0, 400), false);
+    }
+
+    private function append_automation_log($entry) {
+        $logs = $this->get_automation_logs();
+        $normalized = array(
+            'logged_at' => current_time('mysql', true),
+            'lane' => sanitize_key((string) ($entry['lane'] ?? 'automation')),
+            'action' => sanitize_key((string) ($entry['action'] ?? 'event')),
+            'status' => sanitize_key((string) ($entry['status'] ?? 'info')),
+            'message' => sanitize_text_field((string) ($entry['message'] ?? '')),
+            'title' => sanitize_text_field((string) ($entry['title'] ?? '')),
+            'url' => esc_url_raw((string) ($entry['url'] ?? '')),
+            'suggestion_id' => (int) ($entry['suggestion_id'] ?? 0),
+            'post_id' => (int) ($entry['post_id'] ?? 0),
+            'confidence' => isset($entry['confidence']) ? round((float) $entry['confidence'], 2) : null,
+        );
+        array_unshift($logs, $normalized);
+        $this->set_automation_logs($logs);
+    }
+
     private function insert_suggestion($post_id, $audit, $suggestion, $snapshot) {
         global $wpdb;
         $now = current_time('mysql', true);
 
-        $wpdb->insert(
+        $ok = $wpdb->insert(
             $this->table_name(),
             array(
                 'post_id' => (int) $post_id,
@@ -690,6 +771,7 @@ trait KACO_Actions_Trait {
             ),
             array('%d', '%s', '%s', '%s', '%s', '%d', '%s', '%s')
         );
+        return $ok ? (int) $wpdb->insert_id : 0;
     }
 
     private function get_suggestion($id) {
@@ -727,10 +809,161 @@ trait KACO_Actions_Trait {
         );
     }
 
-    private function has_pending_suggestion($post_id) {
+    private function has_active_suggestion($post_id) {
         global $wpdb;
-        $count = (int) $wpdb->get_var($wpdb->prepare('SELECT COUNT(*) FROM ' . $this->table_name() . " WHERE post_id = %d AND status = 'pending'", $post_id));
+        $count = (int) $wpdb->get_var($wpdb->prepare('SELECT COUNT(*) FROM ' . $this->table_name() . " WHERE post_id = %d AND status IN ('pending','needs_review','approved')", $post_id));
         return $count > 0;
+    }
+
+    private function process_automation_suggestions($ids) {
+        $auto_generate = get_option('kaco_automation_auto_generate_ai', '1') === '1';
+        $auto_approve = get_option('kaco_automation_auto_approve', '1') === '1';
+        $auto_apply = get_option('kaco_automation_auto_apply', '0') === '1';
+        $approve_confidence = min(1, max(0, (float) get_option('kaco_automation_approve_confidence', 0.85)));
+        $apply_confidence = min(1, max(0, (float) get_option('kaco_automation_apply_confidence', 0.93)));
+        $result = array(
+            'generated' => 0,
+            'approved' => 0,
+            'applied' => 0,
+            'failed' => 0,
+        );
+
+        foreach ((array) $ids as $id) {
+            $row = $this->get_suggestion((int) $id);
+            if (!$row) {
+                $this->append_automation_log(array(
+                    'lane' => 'optimizer',
+                    'action' => 'load_suggestion',
+                    'status' => 'failed',
+                    'suggestion_id' => (int) $id,
+                    'message' => 'Suggestion row no longer exists.',
+                ));
+                $result['failed']++;
+                continue;
+            }
+
+            if ($auto_generate) {
+                $ok = $this->generate_ai_for_row($row);
+                if (!$ok) {
+                    $this->append_automation_log(array(
+                        'lane' => 'optimizer',
+                        'action' => 'generate_ai',
+                        'status' => 'failed',
+                        'suggestion_id' => (int) $row['id'],
+                        'post_id' => (int) $row['post_id'],
+                        'message' => 'AI generation failed during automation.',
+                    ));
+                    $result['failed']++;
+                    continue;
+                }
+                $result['generated']++;
+                $this->append_automation_log(array(
+                    'lane' => 'optimizer',
+                    'action' => 'generate_ai',
+                    'status' => 'success',
+                    'suggestion_id' => (int) $row['id'],
+                    'post_id' => (int) $row['post_id'],
+                    'message' => 'AI suggestion generated.',
+                ));
+                $row = $this->get_suggestion((int) $id);
+                if (!$row) {
+                    $this->append_automation_log(array(
+                        'lane' => 'optimizer',
+                        'action' => 'reload_suggestion',
+                        'status' => 'failed',
+                        'suggestion_id' => (int) $id,
+                        'message' => 'Suggestion row disappeared after AI generation.',
+                    ));
+                    $result['failed']++;
+                    continue;
+                }
+            }
+
+            $suggestion = json_decode((string) $row['suggestion_data'], true);
+            $ai = !empty($suggestion['ai']) && is_array($suggestion['ai']) ? $suggestion['ai'] : array();
+            $confidence = isset($ai['confidence']) ? (float) $ai['confidence'] : 0.0;
+
+            if ($auto_approve && in_array($row['status'], array('pending', 'needs_review'), true)) {
+                if ($confidence < $approve_confidence) {
+                    $this->append_automation_log(array(
+                        'lane' => 'optimizer',
+                        'action' => 'approve',
+                        'status' => 'needs_review',
+                        'suggestion_id' => (int) $row['id'],
+                        'post_id' => (int) $row['post_id'],
+                        'confidence' => $confidence,
+                        'message' => 'Suggestion stayed in review because confidence is below the auto-approve threshold.',
+                    ));
+                } elseif ($this->approve_suggestion_row($row)) {
+                    $result['approved']++;
+                    $this->append_automation_log(array(
+                        'lane' => 'optimizer',
+                        'action' => 'approve',
+                        'status' => 'success',
+                        'suggestion_id' => (int) $row['id'],
+                        'post_id' => (int) $row['post_id'],
+                        'confidence' => $confidence,
+                        'message' => 'Suggestion auto-approved.',
+                    ));
+                    $row = $this->get_suggestion((int) $id);
+                } else {
+                    $this->append_automation_log(array(
+                        'lane' => 'optimizer',
+                        'action' => 'approve',
+                        'status' => 'failed',
+                        'suggestion_id' => (int) $row['id'],
+                        'post_id' => (int) $row['post_id'],
+                        'confidence' => $confidence,
+                        'message' => 'Suggestion could not be auto-approved.',
+                    ));
+                    $result['failed']++;
+                }
+            }
+
+            if (!$auto_apply || !$row || $row['status'] !== 'approved') {
+                continue;
+            }
+
+            if ($confidence < $apply_confidence) {
+                $this->append_automation_log(array(
+                    'lane' => 'optimizer',
+                    'action' => 'apply',
+                    'status' => 'skipped',
+                    'suggestion_id' => (int) $row['id'],
+                    'post_id' => (int) $row['post_id'],
+                    'confidence' => $confidence,
+                    'message' => 'Suggestion stayed approved because confidence is below the auto-apply threshold.',
+                ));
+                continue;
+            }
+
+            $applied = $this->apply_suggestion_row($row);
+            if ($applied === true) {
+                $result['applied']++;
+                $this->append_automation_log(array(
+                    'lane' => 'optimizer',
+                    'action' => 'apply',
+                    'status' => 'success',
+                    'suggestion_id' => (int) $row['id'],
+                    'post_id' => (int) $row['post_id'],
+                    'confidence' => $confidence,
+                    'message' => 'Approved suggestion auto-applied.',
+                ));
+            } else {
+                $this->append_automation_log(array(
+                    'lane' => 'optimizer',
+                    'action' => 'apply',
+                    'status' => 'failed',
+                    'suggestion_id' => (int) $row['id'],
+                    'post_id' => (int) $row['post_id'],
+                    'confidence' => $confidence,
+                    'message' => is_wp_error($applied) ? $applied->get_error_message() : 'Suggestion could not be auto-applied.',
+                ));
+                $result['failed']++;
+            }
+        }
+
+        return $result;
     }
 
     private function require_admin_request() {

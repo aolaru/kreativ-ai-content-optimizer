@@ -83,9 +83,33 @@ trait KACO_Admin_UI_Trait {
 
     private function render_generator_view() {
         $previews = $this->get_generator_previews();
+        $automation_previews = $this->get_generator_automation_review();
+        $inbox = $this->get_generator_url_inbox();
 
         echo '<h2>Font Generator</h2>';
         echo '<p>Generate draft-ready commercial font posts from marketplace URLs, then review and create drafts inside WordPress.</p>';
+
+        echo '<h3>URL inbox</h3>';
+        echo '<p>Store raw marketplace URLs here and let automation process them in batches.</p>';
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+        wp_nonce_field(self::NONCE_ACTION);
+        echo '<input type="hidden" name="action" value="kaco_add_generator_urls_to_inbox" />';
+        echo '<table class="form-table" role="presentation"><tbody>';
+        echo '<tr><th scope="row"><label for="kaco_generator_inbox_urls">Inbox URLs</label></th>';
+        echo '<td><textarea id="kaco_generator_inbox_urls" name="kaco_generator_inbox_urls" rows="5" cols="100" class="large-text code" placeholder="https://www.myfonts.com/...&#10;https://creativemarket.com/..."></textarea>';
+        echo '<p class="description">One URL per line. Duplicates already in the inbox are skipped.</p></td></tr>';
+        echo '</tbody></table>';
+        submit_button('Add URLs To Inbox', 'secondary', 'submit', false);
+        echo '</form>';
+
+        echo '<p><strong>Inbox status:</strong> ' . count($inbox) . ' URL(s) waiting';
+        if (!empty($inbox)) {
+            echo '<br/>' . esc_html(implode(' | ', array_slice($inbox, 0, 5)));
+            if (count($inbox) > 5) {
+                echo ' ...';
+            }
+        }
+        echo '</p>';
 
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
         wp_nonce_field(self::NONCE_ACTION);
@@ -98,25 +122,41 @@ trait KACO_Admin_UI_Trait {
         submit_button('Generate Draft Previews');
         echo '</form>';
 
-        if (empty($previews)) {
+        if (empty($previews) && empty($automation_previews)) {
             return;
         }
 
-        echo '<h3>Generated previews</h3>';
+        echo '<h3>Review previews</h3>';
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
         wp_nonce_field(self::NONCE_ACTION);
         echo '<input type="hidden" name="action" value="kaco_create_generated_drafts" />';
 
-        foreach ($previews as $index => $item) {
+        $review_previews = array_merge(
+            array_map(function($item) {
+                $item['preview_source'] = 'automation';
+                return $item;
+            }, $automation_previews),
+            array_map(function($item) {
+                $item['preview_source'] = 'manual';
+                return $item;
+            }, $previews)
+        );
+
+        foreach ($review_previews as $index => $item) {
             echo '<div style="border:1px solid #ccd0d4;padding:12px;margin:0 0 18px 0;background:#fff;">';
+            echo '<p><strong>Source:</strong> ' . esc_html((string) ($item['preview_source'] ?? 'manual')) . '</p>';
             echo '<p><strong>Source URL:</strong> ' . esc_html((string) ($item['url'] ?? '')) . '</p>';
             echo '<p><strong>Confidence:</strong> ' . esc_html(isset($item['confidence']) ? number_format((float) $item['confidence'], 2) : '0.00') . '</p>';
             if (!empty($item['evidence']) && is_array($item['evidence'])) {
                 echo '<p><strong>Evidence:</strong> ' . esc_html($this->summarize_ai_evidence((array) $item['evidence'])) . '</p>';
             }
+            if (!empty($item['automation_error'])) {
+                echo '<p><strong>Automation note:</strong> ' . esc_html((string) $item['automation_error']) . '</p>';
+            }
             if (empty($item['designer_names'])) {
                 echo '<p><strong>Designer status:</strong> no explicit source match found. Review before creating the draft.</p>';
             }
+            echo '<input type="hidden" name="previews[' . (int) $index . '][preview_source]" value="' . esc_attr((string) ($item['preview_source'] ?? 'manual')) . '" />';
             echo '<input type="hidden" name="previews[' . (int) $index . '][url]" value="' . esc_attr((string) ($item['url'] ?? '')) . '" />';
             echo '<p><label><strong>Title</strong><br/><input type="text" name="previews[' . (int) $index . '][title]" value="' . esc_attr((string) ($item['title'] ?? '')) . '" class="regular-text" style="width:100%;" /></label></p>';
             echo '<p><label><strong>Image URL</strong><br/><input type="url" name="previews[' . (int) $index . '][image_url]" value="' . esc_attr((string) ($item['image_url'] ?? '')) . '" class="regular-text" style="width:100%;" /></label></p>';
@@ -133,6 +173,89 @@ trait KACO_Admin_UI_Trait {
 
         submit_button('Create Selected Drafts');
         echo '</form>';
+    }
+
+    private function render_exceptions_view() {
+        global $wpdb;
+
+        $needs_review_rows = $wpdb->get_results('SELECT * FROM ' . $this->table_name() . " WHERE status = 'needs_review' ORDER BY updated_at DESC LIMIT 100", ARRAY_A);
+        $generator_review = $this->get_generator_automation_review();
+        $logs = array_values(array_filter($this->get_automation_logs(), function($item) {
+            $status = (string) ($item['status'] ?? '');
+            return in_array($status, array('failed', 'needs_review'), true);
+        }));
+
+        echo '<h2>Exception inbox</h2>';
+        echo '<p>This is the manual review surface for automation fallout: low-confidence old-post suggestions, generator previews that were not auto-created, and automation failures that need retry or cleanup.</p>';
+
+        echo '<h3>Old-post suggestions needing review</h3>';
+        if (empty($needs_review_rows)) {
+            echo '<p>No old-post suggestions are waiting in <code>needs_review</code>.</p>';
+        } else {
+            echo '<table class="widefat striped"><thead><tr><th>ID</th><th>Post</th><th>Confidence</th><th>Updated</th><th>Actions</th></tr></thead><tbody>';
+            foreach ($needs_review_rows as $row) {
+                $post_title = get_the_title((int) $row['post_id']);
+                $suggestion = json_decode((string) $row['suggestion_data'], true);
+                $ai = !empty($suggestion['ai']) && is_array($suggestion['ai']) ? $suggestion['ai'] : array();
+                $confidence = isset($ai['confidence']) ? number_format((float) $ai['confidence'], 2) : '0.00';
+                echo '<tr>';
+                echo '<td>' . (int) $row['id'] . '</td>';
+                echo '<td><a href="' . esc_url(get_edit_post_link((int) $row['post_id'])) . '">' . esc_html($post_title ?: ('Post #' . (int) $row['post_id'])) . '</a></td>';
+                echo '<td>' . esc_html($confidence) . '</td>';
+                echo '<td>' . esc_html((string) $row['updated_at']) . '</td>';
+                echo '<td><a href="' . esc_url(admin_url('admin.php?page=kaco-dashboard&view=suggestions&filter=needs_review')) . '">Open in Suggestions</a></td>';
+                echo '</tr>';
+            }
+            echo '</tbody></table>';
+        }
+
+        echo '<h3>Generator review queue</h3>';
+        if (empty($generator_review)) {
+            echo '<p>No generator previews are waiting for review.</p>';
+        } else {
+            echo '<table class="widefat striped"><thead><tr><th>URL</th><th>Title</th><th>Confidence</th><th>Note</th></tr></thead><tbody>';
+            foreach ($generator_review as $item) {
+                echo '<tr>';
+                echo '<td>' . esc_html((string) ($item['url'] ?? '')) . '</td>';
+                echo '<td>' . esc_html((string) ($item['title'] ?? '')) . '</td>';
+                echo '<td>' . esc_html(isset($item['confidence']) ? number_format((float) $item['confidence'], 2) : '0.00') . '</td>';
+                echo '<td>' . esc_html((string) ($item['automation_error'] ?? 'Manual review required.')) . '</td>';
+                echo '</tr>';
+            }
+            echo '</tbody></table>';
+        }
+
+        echo '<h3>Automation failure log</h3>';
+        if (empty($logs)) {
+            echo '<p>No recent automation failures or review escalations.</p>';
+        } else {
+            echo '<table class="widefat striped"><thead><tr><th>When</th><th>Lane</th><th>Action</th><th>Status</th><th>Item</th><th>Confidence</th><th>Message</th></tr></thead><tbody>';
+            foreach (array_slice($logs, 0, 100) as $log) {
+                $item = array();
+                if (!empty($log['suggestion_id'])) {
+                    $item[] = 'Suggestion #' . (int) $log['suggestion_id'];
+                }
+                if (!empty($log['post_id'])) {
+                    $item[] = 'Post #' . (int) $log['post_id'];
+                }
+                if (!empty($log['title'])) {
+                    $item[] = (string) $log['title'];
+                }
+                if (!empty($log['url'])) {
+                    $item[] = (string) $log['url'];
+                }
+                echo '<tr>';
+                echo '<td>' . esc_html((string) ($log['logged_at'] ?? '')) . '</td>';
+                echo '<td>' . esc_html((string) ($log['lane'] ?? '')) . '</td>';
+                echo '<td>' . esc_html((string) ($log['action'] ?? '')) . '</td>';
+                echo '<td>' . esc_html((string) ($log['status'] ?? '')) . '</td>';
+                echo '<td>' . esc_html(implode(' | ', $item)) . '</td>';
+                echo '<td>' . esc_html(isset($log['confidence']) && $log['confidence'] !== null ? number_format((float) $log['confidence'], 2) : '-') . '</td>';
+                echo '<td>' . esc_html((string) ($log['message'] ?? '')) . '</td>';
+                echo '</tr>';
+            }
+            echo '</tbody></table>';
+        }
     }
 
     private function render_categories_view() {
@@ -666,6 +789,24 @@ trait KACO_Admin_UI_Trait {
         $tag_min_posts_per_tag = (int) get_option('kaco_tag_min_posts_per_tag', 2);
         $editorial_style_guide = (string) get_option('kaco_editorial_style_guide', '');
         $rewrite_mode = (string) get_option('kaco_rewrite_mode', 'replace_body');
+        $automation_enabled = (string) get_option('kaco_automation_enabled', '0');
+        $automation_frequency = (string) get_option('kaco_automation_frequency', 'daily');
+        $automation_post_type = (string) get_option('kaco_automation_post_type', 'post');
+        $automation_scan_limit = (int) get_option('kaco_automation_scan_limit', 50);
+        $automation_fonts_only = (string) get_option('kaco_automation_fonts_only', '1');
+        $automation_issue_filter = (string) get_option('kaco_automation_issue_filter', 'all');
+        $automation_auto_generate_ai = (string) get_option('kaco_automation_auto_generate_ai', '1');
+        $automation_auto_approve = (string) get_option('kaco_automation_auto_approve', '1');
+        $automation_approve_confidence = (string) get_option('kaco_automation_approve_confidence', '0.85');
+        $automation_auto_apply = (string) get_option('kaco_automation_auto_apply', '0');
+        $automation_apply_confidence = (string) get_option('kaco_automation_apply_confidence', '0.93');
+        $automation_process_url_inbox = (string) get_option('kaco_automation_process_url_inbox', '1');
+        $automation_url_batch_size = (int) get_option('kaco_automation_url_batch_size', 10);
+        $automation_auto_create_drafts = (string) get_option('kaco_automation_auto_create_drafts', '1');
+        $automation_generator_create_confidence = (string) get_option('kaco_automation_generator_create_confidence', '0.90');
+        $automation_auto_schedule_generated_posts = (string) get_option('kaco_automation_auto_schedule_generated_posts', '1');
+        $automation_generated_post_spacing_hours = (int) get_option('kaco_automation_generated_post_spacing_hours', 3);
+        $automation_last_run = get_option('kaco_automation_last_run', array());
         $parent_warnings = $this->get_parent_category_warnings();
 
         echo '<h2>Rules and template</h2>';
@@ -741,7 +882,88 @@ trait KACO_Admin_UI_Trait {
         echo '<option value="replace_body"' . selected($rewrite_mode, 'replace_body', false) . '>replace body</option>';
         echo '<option value="full_rebuild"' . selected($rewrite_mode, 'full_rebuild', false) . '>full rebuild</option>';
         echo '</select> <p class="description">`append` keeps existing content and adds the new structure. `replace body` preserves the top commercial blocks and replaces the descriptive body. `full rebuild` replaces the entire post content with the new structure.</p></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_automation_enabled">Automation enabled</label></th>';
+        echo '<td><label><input type="checkbox" id="kaco_automation_enabled" name="kaco_automation_enabled" value="1" ' . checked('1', $automation_enabled, false) . ' /> yes</label> <p class="description">Runs scheduled content audits and can auto-generate AI plus auto-approve high-confidence suggestions.</p></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_automation_frequency">Automation frequency</label></th>';
+        echo '<td><select id="kaco_automation_frequency" name="kaco_automation_frequency">';
+        foreach (array('hourly' => 'hourly', 'twicedaily' => 'twice daily', 'daily' => 'daily') as $value => $label) {
+            echo '<option value="' . esc_attr($value) . '"' . selected($automation_frequency, $value, false) . '>' . esc_html($label) . '</option>';
+        }
+        echo '</select></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_automation_post_type">Automation post type</label></th>';
+        echo '<td><input type="text" id="kaco_automation_post_type" name="kaco_automation_post_type" value="' . esc_attr($automation_post_type) . '" class="regular-text" /></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_automation_scan_limit">Automation scan limit</label></th>';
+        echo '<td><input type="number" min="1" max="500" id="kaco_automation_scan_limit" name="kaco_automation_scan_limit" value="' . (int) $automation_scan_limit . '" /> <p class="description">Number of posts checked per scheduled run.</p></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_automation_issue_filter">Automation issue filter</label></th>';
+        echo '<td><select id="kaco_automation_issue_filter" name="kaco_automation_issue_filter">';
+        foreach (array('all' => 'all issues', 'missing_hierarchy' => 'missing hierarchy', 'thin' => 'thin content', 'stale' => 'stale content', 'low_links' => 'low internal links', 'duplicate' => 'duplicate risk', 'category_desc' => 'category description gaps') as $value => $label) {
+            echo '<option value="' . esc_attr($value) . '"' . selected($automation_issue_filter, $value, false) . '>' . esc_html($label) . '</option>';
+        }
+        echo '</select></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_automation_fonts_only">Automation fonts only</label></th>';
+        echo '<td><label><input type="checkbox" id="kaco_automation_fonts_only" name="kaco_automation_fonts_only" value="1" ' . checked('1', $automation_fonts_only, false) . ' /> yes</label></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_automation_auto_generate_ai">Automation auto-generate AI</label></th>';
+        echo '<td><label><input type="checkbox" id="kaco_automation_auto_generate_ai" name="kaco_automation_auto_generate_ai" value="1" ' . checked('1', $automation_auto_generate_ai, false) . ' /> yes</label></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_automation_auto_approve">Automation auto-approve</label></th>';
+        echo '<td><label><input type="checkbox" id="kaco_automation_auto_approve" name="kaco_automation_auto_approve" value="1" ' . checked('1', $automation_auto_approve, false) . ' /> yes</label> <p class="description">Only suggestions at or above the automation confidence threshold will be approved automatically. Others stay in the exception queue.</p></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_automation_approve_confidence">Automation approve confidence</label></th>';
+        echo '<td><input type="number" step="0.01" min="0" max="1" id="kaco_automation_approve_confidence" name="kaco_automation_approve_confidence" value="' . esc_attr($automation_approve_confidence) . '" /></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_automation_auto_apply">Automation auto-apply approved suggestions</label></th>';
+        echo '<td><label><input type="checkbox" id="kaco_automation_auto_apply" name="kaco_automation_auto_apply" value="1" ' . checked('1', $automation_auto_apply, false) . ' /> yes</label> <p class="description">Only high-confidence approved old-post suggestions are auto-applied. Failures go to the exception inbox and automation log.</p></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_automation_apply_confidence">Automation auto-apply confidence</label></th>';
+        echo '<td><input type="number" step="0.01" min="0" max="1" id="kaco_automation_apply_confidence" name="kaco_automation_apply_confidence" value="' . esc_attr($automation_apply_confidence) . '" /></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_automation_process_url_inbox">Automation process URL inbox</label></th>';
+        echo '<td><label><input type="checkbox" id="kaco_automation_process_url_inbox" name="kaco_automation_process_url_inbox" value="1" ' . checked('1', $automation_process_url_inbox, false) . ' /> yes</label></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_automation_url_batch_size">Automation URL batch size</label></th>';
+        echo '<td><input type="number" min="1" max="100" id="kaco_automation_url_batch_size" name="kaco_automation_url_batch_size" value="' . (int) $automation_url_batch_size . '" /></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_automation_auto_create_drafts">Automation auto-create drafts</label></th>';
+        echo '<td><label><input type="checkbox" id="kaco_automation_auto_create_drafts" name="kaco_automation_auto_create_drafts" value="1" ' . checked('1', $automation_auto_create_drafts, false) . ' /> yes</label> <p class="description">High-confidence generator previews can become scheduled posts automatically. Weaker previews stay in the review queue.</p></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_automation_generator_create_confidence">Generator auto-create confidence</label></th>';
+        echo '<td><input type="number" step="0.01" min="0" max="1" id="kaco_automation_generator_create_confidence" name="kaco_automation_generator_create_confidence" value="' . esc_attr($automation_generator_create_confidence) . '" /></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_automation_auto_schedule_generated_posts">Auto-schedule generated posts</label></th>';
+        echo '<td><label><input type="checkbox" id="kaco_automation_auto_schedule_generated_posts" name="kaco_automation_auto_schedule_generated_posts" value="1" ' . checked('1', $automation_auto_schedule_generated_posts, false) . ' /> yes</label> <p class="description">When enabled, high-confidence generator posts are created as scheduled posts instead of drafts.</p></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_automation_generated_post_spacing_hours">Generated post spacing (hours)</label></th>';
+        echo '<td><input type="number" min="1" max="24" id="kaco_automation_generated_post_spacing_hours" name="kaco_automation_generated_post_spacing_hours" value="' . (int) $automation_generated_post_spacing_hours . '" /> <p class="description">Each newly scheduled post is placed this many hours after the last reserved slot.</p></td></tr>';
         echo '</tbody></table>';
+
+        if (!empty($automation_last_run) && is_array($automation_last_run)) {
+            $automation_bits = array(
+                'Ran: ' . esc_html((string) ($automation_last_run['ran_at'] ?? '-')),
+                'Scanned: ' . (int) ($automation_last_run['scanned'] ?? 0),
+                'Matched: ' . (int) ($automation_last_run['matched'] ?? 0),
+                'Queued: ' . (int) ($automation_last_run['queued'] ?? 0),
+            );
+            if (!empty($automation_last_run['automation']) && is_array($automation_last_run['automation'])) {
+                $automation_bits[] = 'AI generated: ' . (int) ($automation_last_run['automation']['generated'] ?? 0);
+                $automation_bits[] = 'Auto-approved: ' . (int) ($automation_last_run['automation']['approved'] ?? 0);
+                $automation_bits[] = 'Auto-applied: ' . (int) ($automation_last_run['automation']['applied'] ?? 0);
+                $automation_bits[] = 'Failed: ' . (int) ($automation_last_run['automation']['failed'] ?? 0);
+            }
+            if (!empty($automation_last_run['generator_inbox']) && is_array($automation_last_run['generator_inbox'])) {
+                $automation_bits[] = 'Inbox processed: ' . (int) ($automation_last_run['generator_inbox']['processed'] ?? 0);
+                $automation_bits[] = 'Drafts created: ' . (int) ($automation_last_run['generator_inbox']['created'] ?? 0);
+                $automation_bits[] = 'Review queued: ' . (int) ($automation_last_run['generator_inbox']['queued_for_review'] ?? 0);
+            }
+            $automation_bits[] = '<a href="' . esc_url(admin_url('admin.php?page=kaco-dashboard&view=exceptions')) . '">Open exceptions</a>';
+            echo '<p><strong>Last automation run</strong><br/>' . implode(' | ', $automation_bits) . '</p>';
+        }
 
         submit_button('Save Settings');
         echo '</form>';
@@ -770,6 +992,24 @@ trait KACO_Admin_UI_Trait {
         update_option('kaco_tag_min_posts_per_tag', max(1, (int) ($_POST['kaco_tag_min_posts_per_tag'] ?? 2)));
         update_option('kaco_editorial_style_guide', sanitize_textarea_field((string) ($_POST['kaco_editorial_style_guide'] ?? '')));
         update_option('kaco_rewrite_mode', $this->sanitize_rewrite_mode((string) ($_POST['kaco_rewrite_mode'] ?? 'replace_body')));
+        update_option('kaco_automation_enabled', !empty($_POST['kaco_automation_enabled']) ? '1' : '0');
+        update_option('kaco_automation_frequency', $this->sanitize_automation_frequency((string) ($_POST['kaco_automation_frequency'] ?? 'daily')));
+        update_option('kaco_automation_post_type', sanitize_key((string) ($_POST['kaco_automation_post_type'] ?? 'post')));
+        update_option('kaco_automation_scan_limit', min(500, max(1, (int) ($_POST['kaco_automation_scan_limit'] ?? 50))));
+        update_option('kaco_automation_fonts_only', !empty($_POST['kaco_automation_fonts_only']) ? '1' : '0');
+        update_option('kaco_automation_issue_filter', sanitize_key((string) ($_POST['kaco_automation_issue_filter'] ?? 'all')));
+        update_option('kaco_automation_auto_generate_ai', !empty($_POST['kaco_automation_auto_generate_ai']) ? '1' : '0');
+        update_option('kaco_automation_auto_approve', !empty($_POST['kaco_automation_auto_approve']) ? '1' : '0');
+        update_option('kaco_automation_approve_confidence', min(1, max(0, (float) ($_POST['kaco_automation_approve_confidence'] ?? 0.85))));
+        update_option('kaco_automation_auto_apply', !empty($_POST['kaco_automation_auto_apply']) ? '1' : '0');
+        update_option('kaco_automation_apply_confidence', min(1, max(0, (float) ($_POST['kaco_automation_apply_confidence'] ?? 0.93))));
+        update_option('kaco_automation_process_url_inbox', !empty($_POST['kaco_automation_process_url_inbox']) ? '1' : '0');
+        update_option('kaco_automation_url_batch_size', min(100, max(1, (int) ($_POST['kaco_automation_url_batch_size'] ?? 10))));
+        update_option('kaco_automation_auto_create_drafts', !empty($_POST['kaco_automation_auto_create_drafts']) ? '1' : '0');
+        update_option('kaco_automation_generator_create_confidence', min(1, max(0, (float) ($_POST['kaco_automation_generator_create_confidence'] ?? 0.90))));
+        update_option('kaco_automation_auto_schedule_generated_posts', !empty($_POST['kaco_automation_auto_schedule_generated_posts']) ? '1' : '0');
+        update_option('kaco_automation_generated_post_spacing_hours', min(24, max(1, (int) ($_POST['kaco_automation_generated_post_spacing_hours'] ?? 3))));
+        $this->ensure_automation_schedule();
 
         $this->redirect_with_notice('Settings saved.', 'settings');
     }

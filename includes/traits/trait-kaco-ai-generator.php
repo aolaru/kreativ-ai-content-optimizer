@@ -1,6 +1,29 @@
 <?php
 
 trait KACO_AI_Generator_Trait {
+    public function handle_add_generator_urls_to_inbox() {
+        $this->require_admin_request();
+
+        $urls = $this->normalize_generator_urls((string) wp_unslash($_POST['kaco_generator_inbox_urls'] ?? ''));
+        if (empty($urls)) {
+            $this->redirect_with_notice('No marketplace URLs were provided for the inbox.', 'generator');
+        }
+
+        $inbox = $this->get_generator_url_inbox();
+        $map = array_fill_keys($inbox, true);
+        $added = 0;
+        foreach ($urls as $url) {
+            if (isset($map[$url])) {
+                continue;
+            }
+            $inbox[] = $url;
+            $map[$url] = true;
+            $added++;
+        }
+        $this->set_generator_url_inbox($inbox);
+        $this->redirect_with_notice($added . ' URL(s) added to the generator inbox.', 'generator');
+    }
+
     private function generate_ai_for_row($row) {
         $post_id = (int) $row['post_id'];
         $post = get_post($post_id);
@@ -180,9 +203,7 @@ trait KACO_AI_Generator_Trait {
     public function handle_generate_font_previews() {
         $this->require_admin_request();
 
-        $raw_urls = (string) wp_unslash($_POST['kaco_generator_urls'] ?? '');
-        $urls = preg_split('/\r\n|\r|\n/', $raw_urls);
-        $urls = array_values(array_filter(array_map('trim', (array) $urls)));
+        $urls = $this->normalize_generator_urls((string) wp_unslash($_POST['kaco_generator_urls'] ?? ''));
 
         if (empty($urls)) {
             $this->redirect_with_notice('No marketplace URLs were provided.', 'generator');
@@ -224,8 +245,16 @@ trait KACO_AI_Generator_Trait {
         $created = 0;
         $skipped = 0;
         $errors = array();
+        $remaining_manual = array();
+        $remaining_automation = array();
         foreach ($previews as $preview) {
+            $source = sanitize_key((string) ($preview['preview_source'] ?? 'manual'));
             if (empty($preview['create'])) {
+                if ($source === 'automation') {
+                    $remaining_automation[] = $preview;
+                } else {
+                    $remaining_manual[] = $preview;
+                }
                 continue;
             }
 
@@ -233,14 +262,26 @@ trait KACO_AI_Generator_Trait {
             if (is_wp_error($post_id)) {
                 $errors[] = $post_id->get_error_message();
                 $skipped++;
+                $preview['automation_error'] = $post_id->get_error_message();
+                if ($source === 'automation') {
+                    $remaining_automation[] = $preview;
+                } else {
+                    $remaining_manual[] = $preview;
+                }
             } elseif ($post_id > 0) {
                 $created++;
             } else {
                 $skipped++;
+                if ($source === 'automation') {
+                    $remaining_automation[] = $preview;
+                } else {
+                    $remaining_manual[] = $preview;
+                }
             }
         }
 
-        $this->set_generator_previews(array());
+        $this->set_generator_previews($remaining_manual);
+        $this->set_generator_automation_review($remaining_automation);
         $notice = $created . ' draft(s) created.';
         if ($skipped > 0) {
             $notice .= ' ' . $skipped . ' preview(s) skipped, usually because the source URL already exists or required content was missing.';
@@ -249,6 +290,19 @@ trait KACO_AI_Generator_Trait {
             $notice .= ' Last error: ' . $errors[0];
         }
         $this->redirect_with_notice($notice, 'generator');
+    }
+
+    private function normalize_generator_urls($raw_urls) {
+        $urls = preg_split('/\r\n|\r|\n/', (string) $raw_urls);
+        $urls = array_values(array_filter(array_map('trim', (array) $urls)));
+        $normalized = array();
+        foreach ($urls as $url) {
+            $url = esc_url_raw((string) $url);
+            if ($url !== '' && !in_array($url, $normalized, true)) {
+                $normalized[] = $url;
+            }
+        }
+        return $normalized;
     }
 
     private function request_generator_preview($url) {
@@ -452,14 +506,25 @@ trait KACO_AI_Generator_Trait {
         $fact_evidence = $this->build_fact_evidence_map($verified_details, $source_context);
         $refreshed_intro = $this->polish_generator_intro((string) ($payload['refreshed_intro'] ?? ''), $font_name, $foundry_name);
 
+        $font_style_name = $this->canonical_font_style_name((string) ($payload['font_style_name'] ?? ''));
         $designer_evidence = $designer_resolution['evidence'];
         if ($designer_evidence === '' && !empty($payload['evidence']['designer'])) {
             $designer_evidence = sanitize_text_field((string) $payload['evidence']['designer']);
         }
-        $confidence = max(0, min(1, (float) ($payload['confidence'] ?? 0)));
-        if ($designer_resolution['confidence'] < 0.75) {
-            $confidence = min($confidence, max(0.35, $designer_resolution['confidence']));
-        }
+        $model_confidence = max(0, min(1, (float) ($payload['confidence'] ?? 0)));
+        $confidence = $this->calculate_generator_confidence(
+            $model_confidence,
+            $font_name,
+            $font_name_hint,
+            $foundry_name,
+            $foundry_hint,
+            $designer_resolution,
+            $font_style_name,
+            $font_mood_names,
+            $font_use_case_names,
+            $verified_details,
+            $fact_evidence
+        );
 
         return array(
             'url' => esc_url_raw($url),
@@ -467,7 +532,7 @@ trait KACO_AI_Generator_Trait {
             'image_url' => esc_url_raw((string) ($payload['image_url'] ?? '')),
             'designer_names' => $designer_names,
             'foundry_name' => $foundry_name,
-            'font_style_name' => $this->canonical_font_style_name((string) ($payload['font_style_name'] ?? '')),
+            'font_style_name' => $font_style_name,
             'font_mood_names' => $font_mood_names,
             'font_use_case_names' => $font_use_case_names,
             'tags' => array_slice(array_values(array_unique($tags)), 0, 12),
@@ -495,7 +560,7 @@ trait KACO_AI_Generator_Trait {
                 'image_url' => esc_url_raw((string) ($payload['image_url'] ?? '')),
                 'designer_names' => $designer_names,
                 'foundry_name' => $foundry_name,
-                'font_style_name' => $this->canonical_font_style_name((string) ($payload['font_style_name'] ?? '')),
+                'font_style_name' => $font_style_name,
                 'font_mood_names' => $font_mood_names,
                 'font_use_case_names' => $font_use_case_names,
                 'refreshed_intro' => wp_kses_post($refreshed_intro),
@@ -537,6 +602,51 @@ trait KACO_AI_Generator_Trait {
             'confidence' => 0.35,
             'evidence' => $source_evidence !== '' ? $source_evidence : $ai_evidence,
         );
+    }
+
+    private function calculate_generator_confidence($model_confidence, $font_name, $font_name_hint, $foundry_name, $foundry_hint, $designer_resolution, $font_style_name, $font_mood_names, $font_use_case_names, $verified_details, $fact_evidence) {
+        $font_name_confidence = 0.25;
+        if ($font_name !== '' && $font_name_hint !== '') {
+            $font_name_confidence = strcasecmp($font_name, $font_name_hint) === 0 ? 1.0 : 0.65;
+        } elseif ($font_name !== '') {
+            $font_name_confidence = 0.7;
+        }
+
+        $foundry_confidence = 0.25;
+        if ($foundry_name !== '' && $foundry_hint !== '') {
+            $foundry_confidence = strcasecmp($foundry_name, $foundry_hint) === 0 ? 1.0 : 0.65;
+        } elseif ($foundry_name !== '') {
+            $foundry_confidence = 0.65;
+        }
+
+        $style_confidence = $font_style_name !== '' ? 1.0 : 0.2;
+        $mood_confidence = !empty($font_mood_names) ? min(1.0, 0.55 + (0.15 * count((array) $font_mood_names))) : 0.2;
+        $use_case_confidence = !empty($font_use_case_names) ? min(1.0, 0.55 + (0.10 * count((array) $font_use_case_names))) : 0.2;
+
+        $fact_total = max(1, count((array) $verified_details));
+        $fact_supported = count((array) $fact_evidence);
+        $fact_confidence = !empty($verified_details)
+            ? max(0.2, min(1.0, $fact_supported / $fact_total))
+            : 0.45;
+
+        $score =
+            (0.22 * max(0, min(1, (float) $model_confidence))) +
+            (0.24 * max(0, min(1, (float) ($designer_resolution['confidence'] ?? 0)))) +
+            (0.16 * $font_name_confidence) +
+            (0.14 * $foundry_confidence) +
+            (0.08 * $style_confidence) +
+            (0.06 * $mood_confidence) +
+            (0.05 * $use_case_confidence) +
+            (0.05 * $fact_confidence);
+
+        if (empty($designer_resolution['designer_names'])) {
+            $score -= 0.05;
+        }
+        if ($foundry_name === '') {
+            $score -= 0.03;
+        }
+
+        return max(0, min(1, round($score, 2)));
     }
 
     private function sanitize_pairing_notes($value) {
@@ -638,10 +748,10 @@ trait KACO_AI_Generator_Trait {
         }
 
         if ($font_name !== '') {
-            $parts[] = '<p style="background:#f7f7f7;padding:12px;border-left:4px solid #FF3366;font-size:14px;line-height:1.6"><strong>Important Notice</strong><br> ' . esc_html($font_name) . ' is a <strong>premium commercial font</strong> created by its original designer and is <strong>not available for free download</strong> on Kreativ Font. To use this typeface legally in personal or commercial projects, it must be purchased from an official marketplace.</p>';
+            $parts[] = '<p style="background:#f7f7f7;padding:12px;border-left:4px solid #FF3366;font-size:14px;line-height:1.6"><strong>Important Notice</strong><br> ' . esc_html($font_name) . ' is a <strong>premium commercial font</strong> and is <strong>not available for free download</strong> on Kreativ Font. To use it legally in personal or commercial projects, purchase it from an official marketplace.</p>';
         }
 
-        $parts[] = '<p style="background:#f7f7f7;padding:12px;border-left:4px solid #00C2FF;font-size:14px;line-height:1.6;margin-top:10px">Looking for <strong>free fonts instead</strong>? Kreativ Font curates and reviews <strong>legitimately free fonts</strong> and carefully selected free alternatives with proper licenses — no pirated or redistributed files. <a href="https://kreativfont.com/free">Discover free fonts &amp; alternatives</a> OR <a href="https://www.patreon.com/cw/kreativfont" style="font-size:14px">join the Kreativ Font Free Tier</a></p>';
+        $parts[] = '<p style="background:#f7f7f7;padding:12px;border-left:4px solid #00C2FF;font-size:14px;line-height:1.6;margin-top:10px">Looking for <strong>free fonts instead</strong>? Kreativ Font curates <strong>legitimately free fonts</strong> and selected free alternatives with proper licenses.<br><a href="https://kreativfont.com/free">Discover free fonts &amp; alternatives</a> OR <a href="https://www.patreon.com/cw/kreativfont" style="font-size:14px">join the Kreativ Font Free Tier</a></p>';
 
         if ($url !== '' && $font_name !== '') {
             $parts[] = $this->build_generated_intro_paragraph(
@@ -706,10 +816,10 @@ trait KACO_AI_Generator_Trait {
         }
 
         if (!empty($designer_names)) {
-            $sentence .= ' designed by ' . esc_html($this->compact_designer_credit($designer_names));
+            $sentence .= ' from ' . esc_html($this->compact_designer_credit($designer_names));
         }
         if ($foundry_name !== '') {
-            $sentence .= !empty($designer_names) ? ' and published by ' : ' published by ';
+            $sentence .= !empty($designer_names) ? ', published by ' : ' from ';
             $sentence .= esc_html($foundry_name);
         }
         $sentence .= '.</p>';
@@ -1164,7 +1274,158 @@ trait KACO_AI_Generator_Trait {
         update_option('kaco_generator_preview_store', $store, false);
     }
 
-    private function create_generated_draft_from_preview($preview) {
+    private function get_generator_url_inbox() {
+        $value = get_option('kaco_generator_url_inbox', array());
+        return is_array($value) ? array_values(array_filter(array_map('esc_url_raw', $value))) : array();
+    }
+
+    private function set_generator_url_inbox($urls) {
+        update_option('kaco_generator_url_inbox', array_values(array_unique(array_filter(array_map('esc_url_raw', (array) $urls)))), false);
+    }
+
+    private function get_generator_automation_review() {
+        $value = get_option('kaco_generator_automation_review', array());
+        return is_array($value) ? array_values($value) : array();
+    }
+
+    private function set_generator_automation_review($items) {
+        update_option('kaco_generator_automation_review', is_array($items) ? array_values($items) : array(), false);
+    }
+
+    private function process_generator_url_inbox() {
+        if (get_option('kaco_automation_process_url_inbox', '1') !== '1') {
+            return array(
+                'processed' => 0,
+                'created' => 0,
+                'queued_for_review' => 0,
+                'skipped_duplicates' => 0,
+                'failed' => 0,
+                'remaining_inbox' => count($this->get_generator_url_inbox()),
+            );
+        }
+
+        $inbox = $this->get_generator_url_inbox();
+        $batch_size = min(100, max(1, (int) get_option('kaco_automation_url_batch_size', 10)));
+        $auto_create = get_option('kaco_automation_auto_create_drafts', '1') === '1';
+        $auto_schedule = get_option('kaco_automation_auto_schedule_generated_posts', '1') === '1';
+        $create_confidence = min(1, max(0, (float) get_option('kaco_automation_generator_create_confidence', 0.90)));
+        $review_items = $this->get_generator_automation_review();
+
+        $processed = 0;
+        $created = 0;
+        $queued_for_review = 0;
+        $skipped_duplicates = 0;
+        $failed = 0;
+        $remaining = array();
+
+        foreach ($inbox as $url) {
+            if ($processed >= $batch_size) {
+                $remaining[] = $url;
+                continue;
+            }
+            $processed++;
+
+            if ($this->find_existing_generated_post_by_source_url($url) > 0) {
+                $this->append_automation_log(array(
+                    'lane' => 'generator',
+                    'action' => 'create_post',
+                    'status' => 'skipped',
+                    'url' => $url,
+                    'message' => 'Skipped because a post with this source URL already exists.',
+                ));
+                $skipped_duplicates++;
+                continue;
+            }
+
+            $preview = $this->request_generator_preview($url);
+            if (!$preview) {
+                $this->append_automation_log(array(
+                    'lane' => 'generator',
+                    'action' => 'generate_preview',
+                    'status' => 'failed',
+                    'url' => $url,
+                    'message' => 'Preview generation failed.',
+                ));
+                $review_items[] = array(
+                    'preview_source' => 'automation',
+                    'url' => $url,
+                    'title' => '',
+                    'image_url' => '',
+                    'designer_names' => array(),
+                    'foundry_name' => '',
+                    'font_style_name' => '',
+                    'font_mood_names' => array(),
+                    'font_use_case_names' => array(),
+                    'tags' => array(),
+                    'content' => '<p>Generation failed for this URL. Review the source manually.</p>',
+                    'confidence' => 0,
+                    'automation_error' => 'Preview generation failed.',
+                );
+                $queued_for_review++;
+                $failed++;
+                continue;
+            }
+
+            $preview['preview_source'] = 'automation';
+            $confidence = isset($preview['confidence']) ? (float) $preview['confidence'] : 0.0;
+            if ($auto_create && $confidence >= $create_confidence) {
+                $post_id = $this->create_generated_draft_from_preview($preview, array(
+                    'scheduled' => $auto_schedule,
+                ));
+                if (!is_wp_error($post_id) && (int) $post_id > 0) {
+                    $this->append_automation_log(array(
+                        'lane' => 'generator',
+                        'action' => 'create_post',
+                        'status' => 'success',
+                        'url' => $url,
+                        'post_id' => (int) $post_id,
+                        'title' => (string) ($preview['title'] ?? ''),
+                        'confidence' => $confidence,
+                        'message' => !empty($auto_schedule) ? 'Generated post was scheduled automatically.' : 'Generated draft was created automatically.',
+                    ));
+                    $created++;
+                    continue;
+                }
+                $preview['automation_error'] = is_wp_error($post_id) ? $post_id->get_error_message() : 'Draft creation failed.';
+                $this->append_automation_log(array(
+                    'lane' => 'generator',
+                    'action' => 'create_post',
+                    'status' => 'failed',
+                    'url' => $url,
+                    'title' => (string) ($preview['title'] ?? ''),
+                    'confidence' => $confidence,
+                    'message' => (string) $preview['automation_error'],
+                ));
+                $failed++;
+            }
+
+            $this->append_automation_log(array(
+                'lane' => 'generator',
+                'action' => 'queue_review',
+                'status' => 'needs_review',
+                'url' => $url,
+                'title' => (string) ($preview['title'] ?? ''),
+                'confidence' => $confidence,
+                'message' => !empty($preview['automation_error']) ? (string) $preview['automation_error'] : 'Preview requires manual review before creation.',
+            ));
+            $review_items[] = $preview;
+            $queued_for_review++;
+        }
+
+        $this->set_generator_url_inbox($remaining);
+        $this->set_generator_automation_review($review_items);
+
+        return array(
+            'processed' => $processed,
+            'created' => $created,
+            'queued_for_review' => $queued_for_review,
+            'skipped_duplicates' => $skipped_duplicates,
+            'failed' => $failed,
+            'remaining_inbox' => count($remaining),
+        );
+    }
+
+    private function create_generated_draft_from_preview($preview, $options = array()) {
         $title = sanitize_text_field((string) ($preview['title'] ?? ''));
         $content = wp_kses_post((string) ($preview['content'] ?? ''));
         $source_url = esc_url_raw((string) ($preview['url'] ?? ''));
@@ -1190,13 +1451,22 @@ trait KACO_AI_Generator_Trait {
         }
         $tags = array_values(array_unique($tags));
 
-        $post_id = wp_insert_post(array(
+        $post_status = !empty($options['scheduled']) ? 'future' : 'draft';
+        $post_dates = array();
+        $post_data = array(
             'post_type' => 'post',
-            'post_status' => 'draft',
+            'post_status' => $post_status,
             'post_title' => $title,
             'post_content' => $content,
             'tags_input' => $tags,
-        ), true);
+        );
+        if ($post_status === 'future') {
+            $post_dates = $this->reserve_next_generated_post_schedule();
+            $post_data['post_date'] = $post_dates['post_date'];
+            $post_data['post_date_gmt'] = $post_dates['post_date_gmt'];
+        }
+
+        $post_id = wp_insert_post($post_data, true);
 
         if (is_wp_error($post_id) || !$post_id) {
             return is_wp_error($post_id) ? $post_id : new WP_Error('draft_insert_failed', 'Draft creation failed.');
@@ -1205,6 +1475,9 @@ trait KACO_AI_Generator_Trait {
         update_post_meta((int) $post_id, '_kaco_source_url', $source_url);
         update_post_meta((int) $post_id, '_kaco_source_marketplace', $this->detect_marketplace_name($source_url));
         update_post_meta((int) $post_id, '_kaco_generated_at', current_time('mysql', true));
+        if ($post_status === 'future' && !empty($post_dates['post_date_gmt'])) {
+            update_post_meta((int) $post_id, '_kaco_scheduled_at_gmt', (string) $post_dates['post_date_gmt']);
+        }
 
         $category_result = $this->assign_generated_post_categories((int) $post_id, $preview);
         $linked_terms = !empty($category_result['linked_terms']) ? (array) $category_result['linked_terms'] : array();
@@ -1247,6 +1520,29 @@ trait KACO_AI_Generator_Trait {
         }
 
         return (int) $post_id;
+    }
+
+    private function reserve_next_generated_post_schedule() {
+        $spacing_hours = min(24, max(1, (int) get_option('kaco_automation_generated_post_spacing_hours', 3)));
+        $last_scheduled_gmt = (string) get_option('kaco_automation_last_scheduled_gmt', '');
+        $now_gmt = current_time('timestamp', true);
+        $base_timestamp = $now_gmt;
+
+        if ($last_scheduled_gmt !== '') {
+            $last_timestamp = strtotime($last_scheduled_gmt . ' UTC');
+            if ($last_timestamp !== false) {
+                $base_timestamp = max($base_timestamp, (int) $last_timestamp);
+            }
+        }
+
+        $next_timestamp = $base_timestamp + ($spacing_hours * HOUR_IN_SECONDS);
+        $post_date_gmt = gmdate('Y-m-d H:i:s', $next_timestamp);
+        update_option('kaco_automation_last_scheduled_gmt', $post_date_gmt, false);
+
+        return array(
+            'post_date_gmt' => $post_date_gmt,
+            'post_date' => get_date_from_gmt($post_date_gmt),
+        );
     }
 
     private function assign_generated_post_categories($post_id, $preview) {
@@ -1418,35 +1714,25 @@ trait KACO_AI_Generator_Trait {
             $lead .= ' is a typeface';
         }
 
-        $mood_links = $this->term_links_inline($font_mood_terms, true);
-        if ($mood_links !== '') {
-            $lead .= ' with a ' . $mood_links . ' mood';
-        } elseif (!empty($font_mood_names)) {
-            $lead .= ' with a ' . esc_html(strtolower(implode(', ', (array) $font_mood_names))) . ' mood';
-        }
-
-        $use_case_links = $this->term_links_inline($font_use_case_terms, false);
-        if ($use_case_links !== '') {
-            $lead .= ' suited for ' . $use_case_links;
-        } elseif (!empty($font_use_case_names)) {
-            $lead .= ' suited for ' . esc_html(implode(', ', (array) $font_use_case_names));
-        }
-
         $designer_links = $this->term_links_inline($designer_terms, false);
         if ($designer_links !== '') {
-            $lead .= ' designed by ' . $designer_links;
+            $lead .= ' from ' . $designer_links;
         } elseif (!empty($designer_names)) {
-            $lead .= ' designed by ' . esc_html(implode(', ', (array) $designer_names));
+            $lead .= ' from ' . esc_html($this->compact_designer_credit($designer_names));
         }
 
         if ($foundry_term && !is_wp_error($foundry_term)) {
             $foundry_url = get_term_link($foundry_term, 'category');
             $foundry_label = (string) $foundry_term->name;
             if (!is_wp_error($foundry_url)) {
-                $lead .= ' and published by <a href="' . esc_url($foundry_url) . '">' . esc_html($foundry_label) . '</a>';
+                $lead .= !empty($designer_links) || !empty($designer_names)
+                    ? ', published by <a href="' . esc_url($foundry_url) . '">' . esc_html($foundry_label) . '</a>'
+                    : ' from <a href="' . esc_url($foundry_url) . '">' . esc_html($foundry_label) . '</a>';
             }
         } elseif ($foundry_name !== '') {
-            $lead .= ' and published by ' . esc_html($foundry_name);
+            $lead .= !empty($designer_links) || !empty($designer_names)
+                ? ', published by ' . esc_html($foundry_name)
+                : ' from ' . esc_html($foundry_name);
         }
 
         $lead .= '.</p>';

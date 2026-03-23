@@ -24,7 +24,10 @@ final class KACO_Plugin {
     public function __construct($plugin_file) {
         $this->plugin_file = $plugin_file;
         register_activation_hook($this->plugin_file, array($this, 'activate'));
+        register_deactivation_hook($this->plugin_file, array($this, 'deactivate'));
         add_action('admin_menu', array($this, 'register_admin_menu'));
+        add_action('kaco_automation_event', array($this, 'handle_automation_event'));
+        add_action('admin_post_kaco_add_generator_urls_to_inbox', array($this, 'handle_add_generator_urls_to_inbox'));
         add_action('admin_post_kaco_generate_font_previews', array($this, 'handle_generate_font_previews'));
         add_action('admin_post_kaco_create_generated_drafts', array($this, 'handle_create_generated_drafts'));
         add_action('admin_post_kaco_run_audit', array($this, 'handle_run_audit'));
@@ -96,6 +99,34 @@ final class KACO_Plugin {
         add_option('kaco_editorial_style_guide', 'Write like an editorial font reviewer. Avoid filler words such as versatile, unique touch, suitable for various projects, reliable choice, and engaging aesthetics. Use concrete visual observations and specific use cases. Do not invent technical features.');
         add_option('kaco_rewrite_mode', 'replace_body');
         add_option('kaco_generator_preview_store', array());
+        add_option('kaco_generator_url_inbox', array());
+        add_option('kaco_generator_automation_review', array());
+        add_option('kaco_automation_enabled', '0');
+        add_option('kaco_automation_frequency', 'daily');
+        add_option('kaco_automation_post_type', 'post');
+        add_option('kaco_automation_scan_limit', '50');
+        add_option('kaco_automation_fonts_only', '1');
+        add_option('kaco_automation_issue_filter', 'all');
+        add_option('kaco_automation_auto_generate_ai', '1');
+        add_option('kaco_automation_auto_approve', '1');
+        add_option('kaco_automation_approve_confidence', '0.85');
+        add_option('kaco_automation_auto_apply', '0');
+        add_option('kaco_automation_apply_confidence', '0.93');
+        add_option('kaco_automation_process_url_inbox', '1');
+        add_option('kaco_automation_url_batch_size', '10');
+        add_option('kaco_automation_auto_create_drafts', '1');
+        add_option('kaco_automation_generator_create_confidence', '0.90');
+        add_option('kaco_automation_auto_schedule_generated_posts', '1');
+        add_option('kaco_automation_generated_post_spacing_hours', '3');
+        add_option('kaco_automation_last_scheduled_gmt', '');
+        add_option('kaco_automation_last_run', array());
+        add_option('kaco_automation_logs', array());
+
+        $this->ensure_automation_schedule();
+    }
+
+    public function deactivate() {
+        $this->clear_automation_schedule();
     }
 
     public function register_admin_menu() {
@@ -128,6 +159,7 @@ final class KACO_Plugin {
         echo '<nav class="nav-tab-wrapper">';
         $this->tab_link('generator', 'Generator', $view);
         $this->tab_link('audit', 'Audit & Queue', $view);
+        $this->tab_link('exceptions', 'Exceptions', $view);
         $this->tab_link('categories', 'Categories', $view);
         $this->tab_link('tags', 'Tags', $view);
         $this->tab_link('suggestions', 'Suggestions', $view);
@@ -136,6 +168,8 @@ final class KACO_Plugin {
 
         if ($view === 'generator') {
             $this->render_generator_view();
+        } elseif ($view === 'exceptions') {
+            $this->render_exceptions_view();
         } elseif ($view === 'categories') {
             $this->render_categories_view();
         } elseif ($view === 'tags') {
@@ -149,5 +183,34 @@ final class KACO_Plugin {
         }
 
         echo '</div>';
+    }
+
+    private function ensure_automation_schedule() {
+        $enabled = get_option('kaco_automation_enabled', '0') === '1';
+        $timestamp = wp_next_scheduled('kaco_automation_event');
+        if (!$enabled) {
+            $this->clear_automation_schedule();
+            return;
+        }
+
+        $recurrence = $this->sanitize_automation_frequency((string) get_option('kaco_automation_frequency', 'daily'));
+        if ($timestamp) {
+            $scheduled = wp_get_schedule('kaco_automation_event');
+            if ($scheduled === $recurrence) {
+                return;
+            }
+            $this->clear_automation_schedule();
+        }
+
+        wp_schedule_event(time() + MINUTE_IN_SECONDS * 5, $recurrence, 'kaco_automation_event');
+    }
+
+    private function clear_automation_schedule() {
+        wp_clear_scheduled_hook('kaco_automation_event');
+    }
+
+    private function sanitize_automation_frequency($value) {
+        $allowed = array('hourly', 'twicedaily', 'daily');
+        return in_array($value, $allowed, true) ? $value : 'daily';
     }
 }
