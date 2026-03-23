@@ -386,6 +386,7 @@ trait KACO_Taxonomy_Tags_Trait {
             'Monospace',
             'Blackletter',
             'Symbol & Dingbats',
+            'Variable',
         );
     }
 
@@ -447,6 +448,9 @@ trait KACO_Taxonomy_Tags_Trait {
             'symboldingbats' => 'Symbol & Dingbats',
             'dingbats' => 'Symbol & Dingbats',
             'symbol' => 'Symbol & Dingbats',
+            'variable' => 'Variable',
+            'variablefont' => 'Variable',
+            'variablefonts' => 'Variable',
         );
 
         if (!empty($map[$normalized])) {
