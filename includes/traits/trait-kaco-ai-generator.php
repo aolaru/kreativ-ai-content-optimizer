@@ -317,10 +317,10 @@ trait KACO_AI_Generator_Trait {
         }
 
         $targets = $this->font_category_parent_targets();
-        $font_name_hint = $this->infer_font_name_from_source_url($url);
-        $foundry_hint = $this->infer_foundry_name_from_source_url($url);
         $source_context = $this->fetch_source_context($url);
-        $source_entity_hints = $this->extract_source_entity_hints($source_context, $font_name_hint, $foundry_hint);
+        $font_name_hint = $this->infer_font_name_from_source_url($url, $source_context);
+        $foundry_hint = $this->infer_foundry_name_from_source_url($url, $source_context);
+        $source_entity_hints = $this->extract_source_entity_hints($url, $source_context, $font_name_hint, $foundry_hint);
         $system_prompt = 'You generate structured draft proposals for commercial font review posts. Return valid minified JSON only. No markdown code fences. Do not invent technical features that are not clearly supported.';
         $user_prompt = wp_json_encode(array(
             'task' => 'Generate a draft-ready font post proposal from a marketplace URL.',
@@ -469,10 +469,10 @@ trait KACO_AI_Generator_Trait {
         $whats_included = $this->sanitize_simple_bullets($payload['whats_included'] ?? array(), 8);
         $pricing_details = $this->sanitize_simple_bullets($payload['pricing_details'] ?? array(), 5);
 
-        $font_name_hint = $this->infer_font_name_from_source_url($url);
-        $foundry_hint = $this->infer_foundry_name_from_source_url($url);
         $source_context = $this->fetch_source_context($url);
-        $source_entity_hints = $this->extract_source_entity_hints($source_context, $font_name_hint, $foundry_hint);
+        $font_name_hint = $this->infer_font_name_from_source_url($url, $source_context);
+        $foundry_hint = $this->infer_foundry_name_from_source_url($url, $source_context);
+        $source_entity_hints = $this->extract_source_entity_hints($url, $source_context, $font_name_hint, $foundry_hint);
         $source_text = $this->build_source_text_blob($source_context);
         $title = $this->sanitize_generated_title((string) ($payload['title'] ?? ''), $font_name_hint);
         $font_name = $font_name_hint !== '' ? $font_name_hint : $this->extract_font_name_from_title($title);
@@ -506,6 +506,12 @@ trait KACO_AI_Generator_Trait {
         $fact_evidence = $this->build_fact_evidence_map($verified_details, $source_context);
         $refreshed_intro = $this->polish_generator_intro((string) ($payload['refreshed_intro'] ?? ''), $font_name, $foundry_name);
 
+        $font_name = $this->normalize_marketplace_label_case($font_name, $source_context);
+        $title = $this->sanitize_generated_title($title, $font_name);
+        $foundry_name = $this->normalize_marketplace_label_case($foundry_name, $source_context);
+        $designer_names = array_values(array_filter(array_map(function($name) use ($source_context) {
+            return $this->normalize_marketplace_label_case((string) $name, $source_context);
+        }, $designer_names)));
         $font_style_name = $this->canonical_font_style_name((string) ($payload['font_style_name'] ?? ''));
         $designer_evidence = $designer_resolution['evidence'];
         if ($designer_evidence === '' && !empty($payload['evidence']['designer'])) {
@@ -1084,7 +1090,11 @@ trait KACO_AI_Generator_Trait {
         return $font_name_hint;
     }
 
-    private function infer_font_name_from_source_url($url) {
+    private function infer_font_name_from_source_url($url, $source_context = array()) {
+        $parsed = $this->extract_marketplace_source_fields($url, $source_context);
+        if (!empty($parsed['font_name'])) {
+            return $this->normalize_marketplace_label_case((string) $parsed['font_name'], $source_context);
+        }
         $path = (string) wp_parse_url((string) $url, PHP_URL_PATH);
         if ($path === '') {
             return '';
@@ -1098,12 +1108,16 @@ trait KACO_AI_Generator_Trait {
         if (strpos($last, '-font-') !== false) {
             $parts = explode('-font-', $last);
             $candidate = reset($parts);
-            return $this->humanize_slug($candidate);
+            return $this->normalize_marketplace_label_case($this->humanize_slug($candidate), $source_context);
         }
         return '';
     }
 
-    private function infer_foundry_name_from_source_url($url) {
+    private function infer_foundry_name_from_source_url($url, $source_context = array()) {
+        $parsed = $this->extract_marketplace_source_fields($url, $source_context);
+        if (!empty($parsed['foundry_name'])) {
+            return $this->normalize_marketplace_label_case((string) $parsed['foundry_name'], $source_context);
+        }
         $path = (string) wp_parse_url((string) $url, PHP_URL_PATH);
         if ($path === '') {
             return '';
@@ -1117,7 +1131,7 @@ trait KACO_AI_Generator_Trait {
         if (strpos($last, '-font-') !== false) {
             $parts = explode('-font-', $last);
             $candidate = end($parts);
-            return $this->humanize_slug($candidate);
+            return $this->normalize_marketplace_label_case($this->humanize_slug($candidate), $source_context);
         }
         return '';
     }
@@ -1153,7 +1167,8 @@ trait KACO_AI_Generator_Trait {
         );
     }
 
-    private function extract_source_entity_hints($source_context, $font_name_hint, $foundry_hint) {
+    private function extract_source_entity_hints($url, $source_context, $font_name_hint, $foundry_hint) {
+        $parsed = $this->extract_marketplace_source_fields($url, $source_context);
         $text = '';
         if (!empty($source_context['title'])) {
             $text .= ' ' . (string) $source_context['title'];
@@ -1169,8 +1184,8 @@ trait KACO_AI_Generator_Trait {
         }
         $text = preg_replace('/\s+/', ' ', (string) $text);
 
-        $designer_names = array();
-        $designer_evidence = '';
+        $designer_names = !empty($parsed['designer_names']) ? $this->sanitize_name_list($parsed['designer_names']) : array();
+        $designer_evidence = !empty($parsed['designer_evidence']) ? sanitize_text_field((string) $parsed['designer_evidence']) : '';
         if (preg_match('/designed by\s+([^.;|]+?)(?:\s+and\s+published by|\s+published by|[.;|]|$)/i', $text, $matches)) {
             $designer_names = $this->sanitize_name_list($matches[1]);
             $designer_evidence = sanitize_text_field('Designed by ' . trim((string) $matches[1]));
@@ -1178,8 +1193,11 @@ trait KACO_AI_Generator_Trait {
             $designer_names = $this->sanitize_name_list($matches[1]);
             $designer_evidence = sanitize_text_field('Designer: ' . trim((string) $matches[1]));
         }
+        $designer_names = array_values(array_filter(array_map(function($name) use ($source_context) {
+            return $this->normalize_marketplace_label_case((string) $name, $source_context);
+        }, $designer_names)));
 
-        $foundry_name = '';
+        $foundry_name = !empty($parsed['foundry_name']) ? sanitize_text_field((string) $parsed['foundry_name']) : '';
         if (preg_match('/published by\s+([^.;|]+?)(?:\s+on\s+|[.;|]|$)/i', $text, $matches)) {
             $foundry_name = sanitize_text_field((string) $matches[1]);
         }
@@ -1190,12 +1208,141 @@ trait KACO_AI_Generator_Trait {
         if ($font_name_hint !== '' && $foundry_name !== '' && strcasecmp($font_name_hint, $foundry_name) === 0 && $foundry_hint !== '') {
             $foundry_name = $foundry_hint;
         }
+        $foundry_name = $this->normalize_marketplace_label_case($foundry_name, $source_context);
 
         return array(
             'designer_names' => $designer_names,
             'designer_evidence' => $designer_evidence,
             'foundry_name' => $foundry_name,
         );
+    }
+
+    private function extract_marketplace_source_fields($url, $source_context) {
+        $marketplace = $this->detect_marketplace_name($url);
+        if ($marketplace === 'MyFonts') {
+            return $this->extract_myfonts_source_fields($url, $source_context);
+        }
+        if ($marketplace === 'Creative Market') {
+            return $this->extract_creative_market_source_fields($url, $source_context);
+        }
+        return array(
+            'font_name' => '',
+            'foundry_name' => '',
+            'designer_names' => array(),
+            'designer_evidence' => '',
+        );
+    }
+
+    private function extract_myfonts_source_fields($url, $source_context) {
+        $fields = array(
+            'font_name' => '',
+            'foundry_name' => '',
+            'designer_names' => array(),
+            'designer_evidence' => '',
+        );
+
+        $path = (string) wp_parse_url((string) $url, PHP_URL_PATH);
+        $segments = array_values(array_filter(explode('/', trim($path, '/'))));
+        $last = !empty($segments) ? (string) end($segments) : '';
+        if ($last !== '' && strpos($last, '-font-') !== false) {
+            list($font_slug, $foundry_slug) = array_pad(explode('-font-', $last, 2), 2, '');
+            $fields['font_name'] = $this->humanize_slug($font_slug);
+            $fields['foundry_name'] = $this->humanize_slug($foundry_slug);
+        }
+
+        $title_blob = trim(implode(' | ', array_filter(array(
+            (string) ($source_context['title'] ?? ''),
+            (string) ($source_context['og_title'] ?? ''),
+        ))));
+        if ($title_blob !== '') {
+            if (preg_match('/^\s*(.+?)\s+by\s+(.+?)(?:\s*\||\s*-\s*MyFonts|\s*$)/i', $title_blob, $matches)) {
+                $fields['font_name'] = trim((string) $matches[1]);
+                $fields['foundry_name'] = trim((string) $matches[2]);
+            } elseif (preg_match('/^\s*(.+?)(?:\s+font family|\s+font)?\s*\|\s*(.+?)\s*\|\s*MyFonts/i', $title_blob, $matches)) {
+                $fields['font_name'] = trim((string) $matches[1]);
+                $fields['foundry_name'] = trim((string) $matches[2]);
+            }
+        }
+
+        $text = trim(implode(' ', array_filter(array(
+            (string) ($source_context['description'] ?? ''),
+            (string) ($source_context['text_excerpt'] ?? ''),
+        ))));
+        if ($text !== '') {
+            if (preg_match('/(?:font family|typeface|font)\s+by\s+([A-Z][A-Za-z0-9 .,&-]+?)(?:\s+and\s+published by|\s+published by|\.|,|\||$)/', $text, $matches)) {
+                $fields['foundry_name'] = trim((string) $matches[1]);
+            }
+            if (preg_match('/designed by\s+([^.;|]+?)(?:\s+and\s+published by|\s+published by|[.;|]|$)/i', $text, $matches)) {
+                $fields['designer_names'] = $this->sanitize_name_list($matches[1]);
+                $fields['designer_evidence'] = 'Designed by ' . trim((string) $matches[1]);
+            }
+        }
+
+        $fields['font_name'] = $this->normalize_marketplace_label_case((string) $fields['font_name'], $source_context);
+        $fields['foundry_name'] = $this->normalize_marketplace_label_case((string) $fields['foundry_name'], $source_context);
+        $fields['designer_names'] = array_values(array_filter(array_map(function($name) use ($source_context) {
+            return $this->normalize_marketplace_label_case((string) $name, $source_context);
+        }, (array) $fields['designer_names'])));
+
+        return $fields;
+    }
+
+    private function extract_creative_market_source_fields($url, $source_context) {
+        $fields = array(
+            'font_name' => '',
+            'foundry_name' => '',
+            'designer_names' => array(),
+            'designer_evidence' => '',
+        );
+
+        $path = (string) wp_parse_url((string) $url, PHP_URL_PATH);
+        $segments = array_values(array_filter(explode('/', trim($path, '/'))));
+        if (count($segments) >= 2) {
+            $fields['foundry_name'] = $this->humanize_slug((string) $segments[0]);
+            $product_segment = (string) $segments[1];
+            $product_segment = preg_replace('/^\d+-/', '', $product_segment);
+            $fields['font_name'] = $this->humanize_slug($product_segment);
+        }
+
+        $title_blob = trim(implode(' | ', array_filter(array(
+            (string) ($source_context['title'] ?? ''),
+            (string) ($source_context['og_title'] ?? ''),
+        ))));
+        if ($title_blob !== '') {
+            if (preg_match('/^\s*(.+?)\s+by\s+(.+?)(?:\s*\||\s*-\s*Creative Market|\s*$)/i', $title_blob, $matches)) {
+                $fields['font_name'] = trim((string) $matches[1]);
+                $fields['foundry_name'] = trim((string) $matches[2]);
+            } elseif (preg_match('/^\s*(.+?)\s*\|\s*Creative Market/i', $title_blob, $matches)) {
+                $fields['font_name'] = trim((string) $matches[1]);
+            }
+        }
+
+        $text = trim(implode(' ', array_filter(array(
+            (string) ($source_context['description'] ?? ''),
+            (string) ($source_context['text_excerpt'] ?? ''),
+        ))));
+        if ($text !== '') {
+            if (preg_match('/by\s+([A-Z][A-Za-z0-9 .,&-]+?)(?:\s+on\s+Creative Market|\.|,|\||$)/', $text, $matches)) {
+                $fields['foundry_name'] = trim((string) $matches[1]);
+            }
+            if (preg_match('/designed by\s+([^.;|]+?)(?:\s+and\s+published by|\s+published by|[.;|]|$)/i', $text, $matches)) {
+                $fields['designer_names'] = $this->sanitize_name_list($matches[1]);
+                $fields['designer_evidence'] = 'Designed by ' . trim((string) $matches[1]);
+            }
+        }
+
+        if (empty($fields['designer_names']) && $fields['foundry_name'] !== '') {
+            $fields['designer_names'] = array($fields['foundry_name']);
+            $fields['designer_evidence'] = 'Marketplace seller matched the source page byline.';
+        }
+
+        $fields['font_name'] = $this->normalize_marketplace_label_case((string) $fields['font_name'], $source_context);
+        $fields['foundry_name'] = $this->normalize_marketplace_label_case((string) $fields['foundry_name'], $source_context);
+        $fields['designer_names'] = array_values(array_filter(array_map(function($name) use ($source_context) {
+            return $this->normalize_marketplace_label_case((string) $name, $source_context);
+        }, (array) $fields['designer_names'])));
+
+        return $fields;
     }
 
     private function designer_evidence_is_explicit($evidence, $designer_names) {
@@ -1250,6 +1397,53 @@ trait KACO_AI_Generator_Trait {
         $value = str_replace(array('-', '_'), ' ', $value);
         $value = preg_replace('/\s+/', ' ', $value);
         return ucwords(trim((string) $value));
+    }
+
+    private function normalize_marketplace_label_case($value, $source_context = array()) {
+        $value = trim((string) $value);
+        if ($value === '') {
+            return '';
+        }
+
+        $source_blob = trim(implode(' ', array_filter(array(
+            (string) ($source_context['title'] ?? ''),
+            (string) ($source_context['og_title'] ?? ''),
+            (string) ($source_context['description'] ?? ''),
+        ))));
+
+        if ($source_blob !== '') {
+            $match = $this->match_source_case_variant($value, $source_blob);
+            if ($match !== '') {
+                return $match;
+            }
+        }
+
+        $tokens = preg_split('/\s+/', $value);
+        $tokens = array_map(function($token) {
+            if (preg_match('/^[A-Za-z]{2,4}$/', $token)) {
+                return strtoupper($token);
+            }
+            if (preg_match('/^[A-Za-z]{1,3}[0-9]{1,3}$/', $token)) {
+                return strtoupper($token);
+            }
+            if (preg_match('/^[A-Za-z0-9]+$/', $token)) {
+                return ucwords(strtolower($token));
+            }
+            return $token;
+        }, (array) $tokens);
+
+        return trim(implode(' ', $tokens));
+    }
+
+    private function match_source_case_variant($value, $source_blob) {
+        $candidate = preg_replace('/\s+/', '\\s+', preg_quote(trim((string) $value), '/'));
+        if ($candidate === '') {
+            return '';
+        }
+        if (preg_match('/\b(' . $candidate . ')\b/u', (string) $source_blob, $matches)) {
+            return trim((string) $matches[1]);
+        }
+        return '';
     }
 
     private function get_generator_previews() {
