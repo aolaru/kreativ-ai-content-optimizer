@@ -341,6 +341,7 @@ trait KACO_AI_Generator_Trait {
                 'font_mood_names' => array('1 or more fixed font moods'),
                 'font_use_case_names' => array('1 or more fixed font use cases'),
                 'tags' => array('5 to 10 specific tag strings'),
+                'summary_excerpt' => 'single sentence, 150 to 220 characters, factual and natural',
                 'refreshed_intro' => 'string',
                 'visual_analysis' => 'string',
                 'best_for' => array('3 to 5 specific use cases'),
@@ -367,6 +368,9 @@ trait KACO_AI_Generator_Trait {
             ),
             'house_rules' => array(
                 'keep the marketplace purchase link in the CTA and first mention',
+                'summary_excerpt must be exactly one sentence and about 150 to 220 characters',
+                'summary_excerpt must feel natural and editorial, not templated',
+                'summary_excerpt must not include URLs, marketplace boilerplate, or free-download warnings',
                 'write like an editorial font reviewer, not a generic marketplace summary',
                 'avoid filler phrases like versatile, unique touch, reliable choice, and suitable for various projects',
                 'use at least two concrete visual observations',
@@ -479,6 +483,7 @@ trait KACO_AI_Generator_Trait {
         if ($font_name === '') {
             $font_name = $title;
         }
+        $summary_excerpt = $this->sanitize_generated_summary_excerpt((string) ($payload['summary_excerpt'] ?? ''), $font_name);
 
         $ai_designer_names = $this->sanitize_name_list($payload['designer_names'] ?? ($payload['designer_name'] ?? array()));
         $designer_resolution = $this->resolve_designer_names(
@@ -531,6 +536,16 @@ trait KACO_AI_Generator_Trait {
             $verified_details,
             $fact_evidence
         );
+        if ($summary_excerpt === '') {
+            $summary_excerpt = $this->build_generated_summary_excerpt(array(
+                'title' => $title,
+                'font_style_name' => $font_style_name,
+                'designer_names' => $designer_names,
+                'foundry_name' => $foundry_name,
+                'font_mood_names' => $font_mood_names,
+                'font_use_case_names' => $font_use_case_names,
+            ));
+        }
 
         return array(
             'url' => esc_url_raw($url),
@@ -542,6 +557,7 @@ trait KACO_AI_Generator_Trait {
             'font_mood_names' => $font_mood_names,
             'font_use_case_names' => $font_use_case_names,
             'tags' => array_slice(array_values(array_unique($tags)), 0, 12),
+            'summary_excerpt' => $summary_excerpt,
             'refreshed_intro' => wp_kses_post($refreshed_intro),
             'visual_analysis' => wp_kses_post((string) ($payload['visual_analysis'] ?? '')),
             'best_for' => array_slice(array_values(array_unique($best_for)), 0, 5),
@@ -917,6 +933,75 @@ trait KACO_AI_Generator_Trait {
         }
         $last = array_pop($items);
         return implode(', ', $items) . ', and ' . $last;
+    }
+
+    private function smart_truncate_summary($text, $limit) {
+        $cleaned = preg_replace('/\s+/', ' ', trim((string) $text));
+        if (strlen($cleaned) <= (int) $limit) {
+            return $cleaned;
+        }
+        $shortened = substr($cleaned, 0, (int) $limit);
+        $shortened = preg_replace('/\s+\S*$/', '', (string) $shortened);
+        return rtrim((string) $shortened, " ,;:-.") . '...';
+    }
+
+    private function sanitize_generated_summary_excerpt($value, $font_name = '') {
+        $cleaned = wp_strip_all_tags((string) $value);
+        $cleaned = preg_replace('/\s+/', ' ', (string) $cleaned);
+        $cleaned = trim((string) $cleaned, " \t\n\r\0\x0B.");
+        if ($cleaned === '') {
+            return '';
+        }
+        if ($font_name !== '') {
+            $cleaned = preg_replace('/^' . preg_quote($font_name, '/') . '\s+is available on [^.]+\.\s*/i', '', (string) $cleaned);
+        }
+        $cleaned = preg_replace('/^[^.]*available on MyFonts[^.]*\.\s*/i', '', (string) $cleaned);
+        $cleaned = preg_replace('/^[^.]*https?:\/\/\S+\.\s*/i', '', (string) $cleaned);
+        $lowered = strtolower((string) $cleaned);
+        foreach (array('available on myfonts', 'premium commercial font', 'not available for free download', 'http://', 'https://') as $banned) {
+            if (strpos($lowered, $banned) !== false) {
+                return '';
+            }
+        }
+        if (substr_count($cleaned, '.') > 1) {
+            return '';
+        }
+        if (strlen($cleaned) < 110) {
+            return '';
+        }
+        $cleaned = $this->smart_truncate_summary($cleaned, 220);
+        if (substr($cleaned, -1) !== '.') {
+            $cleaned .= '.';
+        }
+        return $cleaned;
+    }
+
+    private function build_generated_summary_excerpt($preview) {
+        $title = (string) ($preview['title'] ?? '');
+        $font_name = strpos($title, ' - ') !== false ? trim((string) strstr($title, ' - ', true)) : $title;
+        $style = strtolower((string) ($preview['font_style_name'] ?? ''));
+        $designers = !empty($preview['designer_names']) ? (array) $preview['designer_names'] : array();
+        $foundry = trim((string) ($preview['foundry_name'] ?? ''));
+        $moods = array_slice(array_map('strtolower', (array) ($preview['font_mood_names'] ?? array())), 0, 3);
+        $use_cases = array_slice((array) ($preview['font_use_case_names'] ?? array()), 0, 3);
+
+        $sentence = $font_name . ' is ';
+        $sentence .= $style !== '' ? 'a ' . $style . ' typeface' : 'a commercial typeface';
+        if (!empty($designers)) {
+            $sentence .= ' by ' . $this->compact_designer_credit($designers);
+        }
+        if ($foundry !== '') {
+            $sentence .= ' for ' . $foundry;
+        }
+        if (!empty($moods)) {
+            $sentence .= ' with a ' . $this->natural_language_list($moods) . ' mood';
+        }
+        if (!empty($use_cases)) {
+            $sentence .= ' suited to ' . $this->natural_language_list($use_cases);
+        }
+        $sentence .= '.';
+
+        return $this->smart_truncate_summary($sentence, 220);
     }
 
     private function compact_designer_credit($designer_names) {
@@ -1622,6 +1707,10 @@ trait KACO_AI_Generator_Trait {
     private function create_generated_draft_from_preview($preview, $options = array()) {
         $title = sanitize_text_field((string) ($preview['title'] ?? ''));
         $content = wp_kses_post((string) ($preview['content'] ?? ''));
+        $summary_excerpt = sanitize_textarea_field((string) ($preview['summary_excerpt'] ?? ''));
+        if ($summary_excerpt === '') {
+            $summary_excerpt = $this->build_generated_summary_excerpt($preview);
+        }
         $source_url = esc_url_raw((string) ($preview['url'] ?? ''));
         if ($title === '' || $content === '') {
             return new WP_Error('missing_preview_fields', 'Generated preview is missing a title or content.');
@@ -1652,6 +1741,7 @@ trait KACO_AI_Generator_Trait {
             'post_status' => $post_status,
             'post_title' => $title,
             'post_content' => $content,
+            'post_excerpt' => $summary_excerpt,
             'tags_input' => $tags,
         );
         if ($post_status === 'future') {
@@ -1669,6 +1759,7 @@ trait KACO_AI_Generator_Trait {
         update_post_meta((int) $post_id, '_kaco_source_url', $source_url);
         update_post_meta((int) $post_id, '_kaco_source_marketplace', $this->detect_marketplace_name($source_url));
         update_post_meta((int) $post_id, '_kaco_generated_at', current_time('mysql', true));
+        update_post_meta((int) $post_id, 'kreativ-page-summary', $summary_excerpt);
         if ($post_status === 'future' && !empty($post_dates['post_date_gmt'])) {
             update_post_meta((int) $post_id, '_kaco_scheduled_at_gmt', (string) $post_dates['post_date_gmt']);
         }

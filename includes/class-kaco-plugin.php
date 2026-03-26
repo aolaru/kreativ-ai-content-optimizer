@@ -31,6 +31,9 @@ final class KACO_Plugin {
         add_action('admin_post_kaco_generate_font_previews', array($this, 'handle_generate_font_previews'));
         add_action('admin_post_kaco_create_generated_drafts', array($this, 'handle_create_generated_drafts'));
         add_action('admin_post_kaco_run_audit', array($this, 'handle_run_audit'));
+        add_action('admin_post_kaco_scan_hierarchy_cleanup', array($this, 'handle_scan_hierarchy_cleanup'));
+        add_action('admin_post_kaco_apply_hierarchy_cleanup', array($this, 'handle_apply_hierarchy_cleanup'));
+        add_action('admin_post_kaco_rollback_hierarchy_cleanup', array($this, 'handle_rollback_hierarchy_cleanup'));
         add_action('admin_post_kaco_generate_category_ai', array($this, 'handle_generate_category_ai'));
         add_action('admin_post_kaco_apply_category_ai', array($this, 'handle_apply_category_ai'));
         add_action('admin_post_kaco_rollback_category_ai', array($this, 'handle_rollback_category_ai'));
@@ -121,6 +124,8 @@ final class KACO_Plugin {
         add_option('kaco_automation_last_scheduled_gmt', '');
         add_option('kaco_automation_last_run', array());
         add_option('kaco_automation_logs', array());
+        add_option('kaco_hierarchy_cleanup_plan', array());
+        add_option('kaco_hierarchy_cleanup_history', array());
 
         $this->ensure_automation_schedule();
     }
@@ -160,6 +165,7 @@ final class KACO_Plugin {
         $this->tab_link('generator', 'Generator', $view);
         $this->tab_link('audit', 'Audit & Queue', $view);
         $this->tab_link('exceptions', 'Exceptions', $view);
+        $this->tab_link('cleanup', 'Hierarchy Cleanup', $view);
         $this->tab_link('categories', 'Categories', $view);
         $this->tab_link('tags', 'Tags', $view);
         $this->tab_link('suggestions', 'Suggestions', $view);
@@ -170,6 +176,8 @@ final class KACO_Plugin {
             $this->render_generator_view();
         } elseif ($view === 'exceptions') {
             $this->render_exceptions_view();
+        } elseif ($view === 'cleanup') {
+            $this->render_hierarchy_cleanup_view();
         } elseif ($view === 'categories') {
             $this->render_categories_view();
         } elseif ($view === 'tags') {

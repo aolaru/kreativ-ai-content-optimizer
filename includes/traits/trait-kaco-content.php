@@ -920,6 +920,172 @@ trait KACO_Content_Trait {
         return array();
     }
 
+    private function build_hierarchy_cleanup_row($post_id) {
+        $hierarchy = $this->analyze_font_category_hierarchy((int) $post_id);
+        if (empty($hierarchy['is_fonts_post'])) {
+            return null;
+        }
+
+        $post = get_post((int) $post_id);
+        if (!$post) {
+            return null;
+        }
+
+        $targets = $this->font_category_parent_targets();
+        $proposal = array(
+            'designer_names' => array(),
+            'foundry_name' => '',
+            'font_style_name' => '',
+            'font_mood_names' => array(),
+            'font_use_case_names' => array(),
+        );
+        $changes = array();
+        $unresolved = array();
+
+        $assigned = !empty($hierarchy['assigned']) && is_array($hierarchy['assigned']) ? $hierarchy['assigned'] : array();
+
+        $designer_names = array_values(array_unique(array_filter(array_map(function($item) {
+            return sanitize_text_field((string) ($item['name'] ?? ''));
+        }, (array) ($assigned['designer'] ?? array())))));
+        $proposal['designer_names'] = $designer_names;
+        if (empty($designer_names)) {
+            $unresolved[] = 'Missing designer';
+        }
+
+        $foundry_children = (array) ($assigned['foundry'] ?? array());
+        if (count($foundry_children) === 1) {
+            $proposal['foundry_name'] = sanitize_text_field((string) ($foundry_children[0]['name'] ?? ''));
+        } elseif (count($foundry_children) > 1) {
+            $unresolved[] = 'Multiple foundry categories need manual review';
+        } else {
+            $unresolved[] = 'Missing foundry';
+        }
+
+        $style_children = (array) ($assigned['font_style'] ?? array());
+        $style_names = array_values(array_unique(array_filter(array_map(function($item) {
+            return $this->canonical_font_style_name((string) ($item['name'] ?? ''));
+        }, $style_children))));
+        if (count($style_names) === 1) {
+            $proposal['font_style_name'] = $style_names[0];
+            if (!empty($style_children)) {
+                $current_names = array_values(array_unique(array_filter(array_map(function($item) {
+                    return sanitize_text_field((string) ($item['name'] ?? ''));
+                }, $style_children))));
+                if (count($current_names) !== 1 || strcasecmp((string) reset($current_names), $style_names[0]) !== 0) {
+                    $changes[] = 'Normalize Font Style to ' . $style_names[0];
+                }
+            }
+        } elseif (count($style_names) > 1) {
+            $unresolved[] = 'Conflicting font style categories';
+        } else {
+            $unresolved[] = 'Missing or invalid font style';
+        }
+
+        $mood_children = (array) ($assigned['font_mood'] ?? array());
+        $mood_names = array_values(array_unique(array_filter(array_map(function($item) {
+            return $this->canonical_font_mood_name((string) ($item['name'] ?? ''));
+        }, $mood_children))));
+        if (!empty($mood_names)) {
+            $proposal['font_mood_names'] = $mood_names;
+            $current_moods = array_values(array_unique(array_filter(array_map(function($item) {
+                return sanitize_text_field((string) ($item['name'] ?? ''));
+            }, $mood_children))));
+            if ($this->normalized_name_list_differs($current_moods, $mood_names)) {
+                $changes[] = 'Normalize Font Mood to ' . implode(', ', $mood_names);
+            }
+        } else {
+            $unresolved[] = 'Missing or invalid font mood';
+        }
+
+        $use_case_children = (array) ($assigned['font_use_case'] ?? array());
+        $use_case_names = array_values(array_unique(array_filter(array_map(function($item) {
+            return $this->canonical_font_use_case_name((string) ($item['name'] ?? ''));
+        }, $use_case_children))));
+        if (!empty($use_case_names)) {
+            $proposal['font_use_case_names'] = $use_case_names;
+            $current_use_cases = array_values(array_unique(array_filter(array_map(function($item) {
+                return sanitize_text_field((string) ($item['name'] ?? ''));
+            }, $use_case_children))));
+            if ($this->normalized_name_list_differs($current_use_cases, $use_case_names)) {
+                $changes[] = 'Normalize Font Use Case to ' . implode(', ', $use_case_names);
+            }
+        } else {
+            $unresolved[] = 'Missing or invalid font use case';
+        }
+
+        $current_preview = $this->build_current_hierarchy_preview($hierarchy);
+        $proposed_preview = $this->build_current_hierarchy_preview(array(
+            'assigned' => array(
+                'designer' => $this->name_list_to_hierarchy_items($proposal['designer_names']),
+                'foundry' => $this->name_list_to_hierarchy_items($proposal['foundry_name'] !== '' ? array($proposal['foundry_name']) : array()),
+                'font_style' => $this->name_list_to_hierarchy_items($proposal['font_style_name'] !== '' ? array($proposal['font_style_name']) : array()),
+                'font_mood' => $this->name_list_to_hierarchy_items($proposal['font_mood_names']),
+                'font_use_case' => $this->name_list_to_hierarchy_items($proposal['font_use_case_names']),
+            ),
+        ));
+
+        $current_signature = $this->hierarchy_signature_from_assigned($assigned);
+        $proposed_signature = $this->hierarchy_signature_from_assigned(array(
+            'designer' => $this->name_list_to_hierarchy_items($proposal['designer_names']),
+            'foundry' => $this->name_list_to_hierarchy_items($proposal['foundry_name'] !== '' ? array($proposal['foundry_name']) : array()),
+            'font_style' => $this->name_list_to_hierarchy_items($proposal['font_style_name'] !== '' ? array($proposal['font_style_name']) : array()),
+            'font_mood' => $this->name_list_to_hierarchy_items($proposal['font_mood_names']),
+            'font_use_case' => $this->name_list_to_hierarchy_items($proposal['font_use_case_names']),
+        ));
+
+        return array(
+            'post_id' => (int) $post_id,
+            'post_title' => (string) $post->post_title,
+            'edit_url' => get_edit_post_link((int) $post_id),
+            'issues' => array_values(array_unique(array_merge((array) ($hierarchy['missing'] ?? array()), $unresolved))),
+            'changes' => array_values(array_unique($changes)),
+            'current_preview' => $current_preview,
+            'proposed_preview' => $proposed_preview,
+            'proposed_hierarchy' => $proposal,
+            'applyable' => $current_signature !== $proposed_signature && !empty(array_filter($proposal)),
+            'review_required' => !empty($unresolved),
+            'parent_targets' => $targets,
+        );
+    }
+
+    private function hierarchy_signature_from_assigned($assigned) {
+        $signature = array();
+        foreach (array('designer', 'foundry', 'font_style', 'font_mood', 'font_use_case') as $key) {
+            $names = array();
+            foreach ((array) ($assigned[$key] ?? array()) as $item) {
+                $name = sanitize_text_field((string) ($item['name'] ?? ''));
+                if ($name !== '') {
+                    $names[] = $this->normalize_term_name($name);
+                }
+            }
+            sort($names);
+            $signature[$key] = $names;
+        }
+        return wp_json_encode($signature);
+    }
+
+    private function name_list_to_hierarchy_items($names) {
+        $items = array();
+        foreach ((array) $names as $name) {
+            $name = sanitize_text_field((string) $name);
+            if ($name !== '') {
+                $items[] = array('name' => $name);
+            }
+        }
+        return $items;
+    }
+
+    private function normalized_name_list_differs($current_names, $canonical_names) {
+        $normalize = function($names) {
+            $items = array_values(array_unique(array_filter(array_map(function($name) {
+                return $this->normalize_term_name((string) $name);
+            }, (array) $names))));
+            sort($items);
+            return $items;
+        };
+        return $normalize($current_names) !== $normalize($canonical_names);
+    }
+
     private function resolve_hierarchy_terms_for_parent($values, $target_key, $parent_id) {
         $details = array();
         foreach ((array) $values as $value) {

@@ -166,6 +166,7 @@ trait KACO_Admin_UI_Trait {
             echo '<p><label><strong>Font Moods</strong><br/><input type="text" name="previews[' . (int) $index . '][font_mood_names]" value="' . esc_attr(implode(', ', (array) ($item['font_mood_names'] ?? array()))) . '" class="regular-text" style="width:100%;" /></label></p>';
             echo '<p><label><strong>Font Use Cases</strong><br/><input type="text" name="previews[' . (int) $index . '][font_use_case_names]" value="' . esc_attr(implode(', ', (array) ($item['font_use_case_names'] ?? array()))) . '" class="regular-text" style="width:100%;" /></label></p>';
             echo '<p><label><strong>Tags</strong><br/><input type="text" name="previews[' . (int) $index . '][tags]" value="' . esc_attr(implode(', ', (array) ($item['tags'] ?? array()))) . '" class="regular-text" style="width:100%;" /></label></p>';
+            echo '<p><label><strong>Page Summary</strong><br/><textarea name="previews[' . (int) $index . '][summary_excerpt]" rows="3" class="large-text">' . esc_textarea((string) ($item['summary_excerpt'] ?? '')) . '</textarea></label></p>';
             echo '<p><label><strong>Content</strong><br/><textarea name="previews[' . (int) $index . '][content]" rows="18" class="large-text code">' . esc_textarea((string) ($item['content'] ?? '')) . '</textarea></label></p>';
             echo '<label><input type="checkbox" name="previews[' . (int) $index . '][create]" value="1" checked="checked" /> create draft</label>';
             echo '</div>';
@@ -173,6 +174,88 @@ trait KACO_Admin_UI_Trait {
 
         submit_button('Create Selected Drafts');
         echo '</form>';
+    }
+
+    private function render_hierarchy_cleanup_view() {
+        $plan = $this->get_hierarchy_cleanup_plan();
+        $rows = !empty($plan['rows']) && is_array($plan['rows']) ? $plan['rows'] : array();
+        $history = $this->get_hierarchy_cleanup_history();
+
+        echo '<h2>Hierarchy cleanup</h2>';
+        echo '<p>Repair legacy font post category assignments against the current rules. This tool only uses existing category assignments and fixed-list normalization. It does not guess missing branches from AI.</p>';
+
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+        wp_nonce_field(self::NONCE_ACTION);
+        echo '<input type="hidden" name="action" value="kaco_scan_hierarchy_cleanup" />';
+        echo '<table class="form-table" role="presentation"><tbody>';
+        echo '<tr><th scope="row"><label for="kaco_cleanup_post_type">Post type</label></th>';
+        echo '<td><input type="text" id="kaco_cleanup_post_type" name="kaco_cleanup_post_type" value="post" class="regular-text" /></td></tr>';
+        echo '<tr><th scope="row"><label for="kaco_cleanup_limit">Batch size</label></th>';
+        echo '<td><input type="number" min="1" max="1000" id="kaco_cleanup_limit" name="kaco_cleanup_limit" value="200" /></td></tr>';
+        echo '<tr><th scope="row"><label for="kaco_cleanup_scan_all">Scan all matching posts</label></th>';
+        echo '<td><label><input type="checkbox" id="kaco_cleanup_scan_all" name="kaco_cleanup_scan_all" value="1" /> yes</label></td></tr>';
+        echo '<tr><th scope="row"><label for="kaco_cleanup_fonts_only">Fonts posts only</label></th>';
+        echo '<td><label><input type="checkbox" id="kaco_cleanup_fonts_only" name="kaco_cleanup_fonts_only" value="1" checked="checked" /> yes</label></td></tr>';
+        echo '</tbody></table>';
+        submit_button('Scan Hierarchy Issues');
+        echo '</form>';
+
+        if (!empty($plan)) {
+            echo '<p><strong>Last scan:</strong> ' . esc_html((string) ($plan['generated_at'] ?? '-')) . ' | Scanned: ' . (int) ($plan['scanned'] ?? 0) . ' | Rows: ' . count($rows) . '</p>';
+        }
+
+        if (!empty($rows)) {
+            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+            wp_nonce_field(self::NONCE_ACTION);
+            echo '<input type="hidden" name="action" value="kaco_apply_hierarchy_cleanup" />';
+            echo '<p>';
+            submit_button('Apply Selected Repairs', 'primary', '', false);
+            echo '</p>';
+            echo '<table class="widefat striped">';
+            echo '<thead><tr><th><input type="checkbox" onclick="jQuery(\'.kaco-cleanup-select\').prop(\'checked\', this.checked);" /></th><th>Post</th><th>Current</th><th>Proposed</th><th>Issues</th><th>Changes</th><th>Status</th></tr></thead><tbody>';
+            foreach ($rows as $row) {
+                $post_id = (int) ($row['post_id'] ?? 0);
+                $applyable = !empty($row['applyable']);
+                $review_required = !empty($row['review_required']);
+                echo '<tr>';
+                echo '<td>';
+                if ($applyable) {
+                    echo '<input class="kaco-cleanup-select" type="checkbox" name="cleanup_post_ids[]" value="' . $post_id . '" checked="checked" />';
+                }
+                echo '</td>';
+                echo '<td><a href="' . esc_url((string) ($row['edit_url'] ?? '#')) . '">' . esc_html((string) ($row['post_title'] ?? ('Post #' . $post_id))) . '</a></td>';
+                echo '<td>' . esc_html((string) ($row['current_preview'] ?? '-')) . '</td>';
+                echo '<td>' . esc_html((string) ($row['proposed_preview'] ?? '-')) . '</td>';
+                echo '<td>' . esc_html(implode(', ', (array) ($row['issues'] ?? array()))) . '</td>';
+                echo '<td>' . esc_html(!empty($row['changes']) ? implode(' | ', (array) $row['changes']) : 'No automatic repair available') . '</td>';
+                echo '<td>' . esc_html($applyable ? ($review_required ? 'Applyable with review notes' : 'Applyable') : 'Review only') . '</td>';
+                echo '</tr>';
+            }
+            echo '</tbody></table>';
+            echo '</form>';
+        } else {
+            echo '<p>No hierarchy cleanup plan is loaded yet.</p>';
+        }
+
+        if (!empty($history)) {
+            echo '<h3>Recent cleanup batches</h3>';
+            echo '<table class="widefat striped"><thead><tr><th>When</th><th>Posts</th><th>Action</th></tr></thead><tbody>';
+            foreach ($history as $batch_id => $batch) {
+                echo '<tr>';
+                echo '<td>' . esc_html((string) ($batch['created_at'] ?? '')) . '</td>';
+                echo '<td>' . count((array) ($batch['items'] ?? array())) . '</td>';
+                echo '<td>';
+                echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="display:inline-block;">';
+                wp_nonce_field(self::NONCE_ACTION);
+                echo '<input type="hidden" name="action" value="kaco_rollback_hierarchy_cleanup" />';
+                echo '<input type="hidden" name="cleanup_batch_id" value="' . esc_attr((string) $batch_id) . '" />';
+                submit_button('Rollback', 'secondary small', '', false);
+                echo '</form>';
+                echo '</td>';
+                echo '</tr>';
+            }
+            echo '</tbody></table>';
+        }
     }
 
     private function render_exceptions_view() {

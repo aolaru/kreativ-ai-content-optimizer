@@ -1,6 +1,139 @@
 <?php
 
 trait KACO_Actions_Trait {
+    public function handle_scan_hierarchy_cleanup() {
+        $this->require_admin_request();
+
+        $post_type = sanitize_key((string) ($_POST['kaco_cleanup_post_type'] ?? 'post'));
+        $limit = min(1000, max(1, (int) ($_POST['kaco_cleanup_limit'] ?? 200)));
+        $scan_all = !empty($_POST['kaco_cleanup_scan_all']);
+        $fonts_only = !empty($_POST['kaco_cleanup_fonts_only']);
+
+        $query = new WP_Query(array(
+            'post_type' => $post_type,
+            'post_status' => array('publish', 'draft', 'future'),
+            'posts_per_page' => $scan_all ? -1 : $limit,
+            'orderby' => 'modified',
+            'order' => 'DESC',
+            'fields' => 'ids',
+        ));
+
+        $rows = array();
+        foreach ((array) $query->posts as $post_id) {
+            $post_id = (int) $post_id;
+            if ($fonts_only && !$this->is_fonts_post($post_id)) {
+                continue;
+            }
+            $row = $this->build_hierarchy_cleanup_row($post_id);
+            if (!$row) {
+                continue;
+            }
+            if (empty($row['issues']) && empty($row['changes'])) {
+                continue;
+            }
+            $rows[] = $row;
+        }
+        wp_reset_postdata();
+
+        update_option('kaco_hierarchy_cleanup_plan', array(
+            'generated_at' => current_time('mysql', true),
+            'post_type' => $post_type,
+            'scanned' => count((array) $query->posts),
+            'rows' => $rows,
+        ), false);
+
+        $this->redirect_with_notice('Hierarchy cleanup scan complete. Found ' . count($rows) . ' posts with hierarchy issues.', 'cleanup');
+    }
+
+    public function handle_apply_hierarchy_cleanup() {
+        $this->require_admin_request();
+
+        $plan = $this->get_hierarchy_cleanup_plan();
+        $rows = !empty($plan['rows']) && is_array($plan['rows']) ? $plan['rows'] : array();
+        if (empty($rows)) {
+            $this->redirect_with_notice('No hierarchy cleanup plan is available.', 'cleanup');
+        }
+
+        $selected = !empty($_POST['cleanup_post_ids']) && is_array($_POST['cleanup_post_ids']) ? array_map('intval', (array) $_POST['cleanup_post_ids']) : array();
+        if (empty($selected)) {
+            $selected = array_map(function($row) {
+                return (int) ($row['post_id'] ?? 0);
+            }, array_filter($rows, function($row) {
+                return !empty($row['applyable']);
+            }));
+        }
+        $selected = array_values(array_filter(array_unique($selected)));
+        if (empty($selected)) {
+            $this->redirect_with_notice('No hierarchy cleanup rows were selected.', 'cleanup');
+        }
+
+        $history = $this->get_hierarchy_cleanup_history();
+        $batch_id = uniqid('hierarchy_', true);
+        $batch = array(
+            'created_at' => current_time('mysql', true),
+            'items' => array(),
+        );
+        $applied = 0;
+
+        foreach ($rows as $row) {
+            $post_id = (int) ($row['post_id'] ?? 0);
+            if ($post_id <= 0 || !in_array($post_id, $selected, true) || empty($row['applyable'])) {
+                continue;
+            }
+
+            $snapshot = $this->capture_post_terms($post_id, array('category'));
+            $linked_terms = $this->apply_font_category_hierarchy($post_id, (array) ($row['proposed_hierarchy'] ?? array()));
+            $after = $this->capture_post_terms($post_id, array('category'));
+            $batch['items'][$post_id] = array(
+                'post_id' => $post_id,
+                'post_title' => (string) ($row['post_title'] ?? ''),
+                'before_terms' => $snapshot,
+                'after_terms' => $after,
+                'linked_terms' => $linked_terms,
+            );
+            $applied++;
+        }
+
+        if ($applied === 0) {
+            $this->redirect_with_notice('No hierarchy cleanup repairs were applied.', 'cleanup');
+        }
+
+        $history[$batch_id] = $batch;
+        update_option('kaco_hierarchy_cleanup_history', $history, false);
+
+        $remaining_rows = array_values(array_filter($rows, function($row) use ($selected) {
+            $post_id = (int) ($row['post_id'] ?? 0);
+            return !in_array($post_id, $selected, true);
+        }));
+        $plan['rows'] = $remaining_rows;
+        update_option('kaco_hierarchy_cleanup_plan', $plan, false);
+
+        $this->redirect_with_notice('Hierarchy cleanup applied to ' . $applied . ' posts.', 'cleanup');
+    }
+
+    public function handle_rollback_hierarchy_cleanup() {
+        $this->require_admin_request();
+
+        $batch_id = sanitize_text_field((string) ($_POST['cleanup_batch_id'] ?? ''));
+        $history = $this->get_hierarchy_cleanup_history();
+        $batch = $history[$batch_id] ?? null;
+        if (!$batch || empty($batch['items']) || !is_array($batch['items'])) {
+            $this->redirect_with_notice('Hierarchy cleanup rollback data not found.', 'cleanup');
+        }
+
+        foreach ($batch['items'] as $item) {
+            $post_id = (int) ($item['post_id'] ?? 0);
+            if ($post_id <= 0 || empty($item['before_terms'])) {
+                continue;
+            }
+            $this->restore_post_terms($post_id, (array) $item['before_terms']);
+        }
+
+        unset($history[$batch_id]);
+        update_option('kaco_hierarchy_cleanup_history', $history, false);
+        $this->redirect_with_notice('Hierarchy cleanup batch rolled back.', 'cleanup');
+    }
+
     public function handle_run_audit() {
         $this->require_admin_request();
 
@@ -624,6 +757,10 @@ trait KACO_Actions_Trait {
             return is_wp_error($updated_post_id) ? $updated_post_id : new WP_Error('post_update_failed', 'Post update failed.');
         }
 
+        if (!empty($post_update['post_excerpt'])) {
+            update_post_meta((int) $post->ID, 'kreativ-page-summary', (string) $post_update['post_excerpt']);
+        }
+
         $this->update_suggestion_status($suggestion_id, 'applied', get_current_user_id());
         return true;
     }
@@ -722,6 +859,16 @@ trait KACO_Actions_Trait {
 
     private function get_tag_merge_history() {
         $value = get_option('kaco_tag_merge_history', array());
+        return is_array($value) ? $value : array();
+    }
+
+    private function get_hierarchy_cleanup_plan() {
+        $value = get_option('kaco_hierarchy_cleanup_plan', array());
+        return is_array($value) ? $value : array();
+    }
+
+    private function get_hierarchy_cleanup_history() {
+        $value = get_option('kaco_hierarchy_cleanup_history', array());
         return is_array($value) ? $value : array();
     }
 
