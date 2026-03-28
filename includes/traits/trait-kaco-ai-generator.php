@@ -478,6 +478,7 @@ trait KACO_AI_Generator_Trait {
         $foundry_hint = $this->infer_foundry_name_from_source_url($url, $source_context);
         $source_entity_hints = $this->extract_source_entity_hints($url, $source_context, $font_name_hint, $foundry_hint);
         $source_text = $this->build_source_text_blob($source_context);
+        $fact_index = $this->build_source_fact_index($source_context);
         $title = $this->sanitize_generated_title((string) ($payload['title'] ?? ''), $font_name_hint);
         $font_name = $font_name_hint !== '' ? $font_name_hint : $this->extract_font_name_from_title($title);
         if ($font_name === '') {
@@ -504,11 +505,11 @@ trait KACO_AI_Generator_Trait {
         }
         $font_mood_names = $this->sanitize_canonical_name_list($payload['font_mood_names'] ?? ($payload['font_mood_name'] ?? array()), 'canonical_font_mood_name');
         $font_use_case_names = $this->sanitize_canonical_name_list($payload['font_use_case_names'] ?? ($payload['font_use_case_name'] ?? array()), 'canonical_font_use_case_name');
-        $font_features = $this->filter_supported_fact_bullets($font_features, $source_text, array('style', 'weight', 'italic', 'condensed', 'ligature', 'alternate', 'glyph', 'multilingual', 'desktop', 'webfont', 'woff', 'otf', 'ttf'));
-        $whats_included = $this->filter_supported_fact_bullets($whats_included, $source_text, array('family', 'styles', 'font', 'desktop', 'webfont', 'woff', 'otf', 'ttf', 'package'));
-        $pricing_details = $this->filter_supported_fact_bullets($pricing_details, $source_text, array('$', 'usd', 'price', 'pricing', 'from', 'sale', 'off', 'family pack'));
-        $verified_details = $this->filter_supported_fact_bullets($verified_details, $source_text, array('designed', 'published', 'style', 'weights', 'italic', 'condensed', 'desktop', 'webfont', '$', 'usd', 'family', 'styles'));
-        $fact_evidence = $this->build_fact_evidence_map($verified_details, $source_context);
+        $font_features = $this->filter_supported_fact_bullets($font_features, $fact_index, array('style', 'weight', 'italic', 'condensed', 'ligature', 'alternate', 'glyph', 'multilingual', 'desktop', 'webfont', 'woff', 'otf', 'ttf'));
+        $whats_included = $this->filter_supported_fact_bullets($whats_included, $fact_index, array('family', 'styles', 'font', 'desktop', 'webfont', 'woff', 'otf', 'ttf', 'package'));
+        $pricing_details = $this->filter_supported_fact_bullets($pricing_details, $fact_index, array('$', 'usd', 'price', 'pricing', 'from', 'sale', 'off', 'family pack'));
+        $verified_details = $this->filter_supported_fact_bullets($verified_details, $fact_index, array('designed', 'published', 'style', 'weights', 'italic', 'condensed', 'desktop', 'webfont', '$', 'usd', 'family', 'styles'));
+        $fact_evidence = $this->build_fact_evidence_map(array_merge($font_features, $whats_included, $pricing_details, $verified_details), $fact_index);
         $refreshed_intro = $this->polish_generator_intro((string) ($payload['refreshed_intro'] ?? ''), $font_name, $foundry_name);
 
         $font_name = $this->normalize_marketplace_label_case($font_name, $source_context);
@@ -1023,33 +1024,16 @@ trait KACO_AI_Generator_Trait {
         return implode(' ', $parts);
     }
 
-    private function filter_supported_fact_bullets($items, $source_text, $keywords) {
+    private function filter_supported_fact_bullets($items, $fact_index, $keywords) {
         $items = array_values(array_unique(array_filter(array_map('sanitize_text_field', (array) $items))));
-        $source_text = strtolower((string) $source_text);
-        if ($source_text === '') {
+        if (empty($fact_index['sentences'])) {
             return array();
         }
 
         $filtered = array();
         foreach ($items as $item) {
-            $item_lc = strtolower($item);
-            $keep = false;
-
-            if (preg_match('/\\$\\s*\\d|\\d+\\s*(usd|eur|gbp)|\\d+\\s*styles?|\\d+\\s*fonts?/i', $item) && preg_match('/\\$\\s*\\d|\\d+\\s*(usd|eur|gbp)|\\d+\\s*styles?|\\d+\\s*fonts?/i', $source_text)) {
-                $keep = true;
-            }
-
-            if (!$keep) {
-                foreach ((array) $keywords as $keyword) {
-                    $keyword = strtolower((string) $keyword);
-                    if ($keyword !== '' && strpos($item_lc, $keyword) !== false && strpos($source_text, $keyword) !== false) {
-                        $keep = true;
-                        break;
-                    }
-                }
-            }
-
-            if ($keep) {
+            $evidence = $this->find_fact_evidence($item, $fact_index, $keywords);
+            if ($evidence !== '') {
                 $filtered[] = $item;
             }
         }
@@ -1098,10 +1082,9 @@ trait KACO_AI_Generator_Trait {
         return false;
     }
 
-    private function build_fact_evidence_map($facts, $source_context) {
+    private function build_fact_evidence_map($facts, $fact_index) {
         $map = array();
-        $source_text = trim((string) ($source_context['text_excerpt'] ?? ''));
-        if ($source_text === '') {
+        if (empty($fact_index['sentences'])) {
             return $map;
         }
         foreach ((array) $facts as $fact) {
@@ -1109,7 +1092,7 @@ trait KACO_AI_Generator_Trait {
             if ($fact === '') {
                 continue;
             }
-            $snippet = $this->find_evidence_snippet_for_fact($fact, $source_text);
+            $snippet = $this->find_fact_evidence($fact, $fact_index, array());
             if ($snippet !== '') {
                 $map[$fact] = $snippet;
             }
@@ -1117,34 +1100,100 @@ trait KACO_AI_Generator_Trait {
         return $map;
     }
 
-    private function find_evidence_snippet_for_fact($fact, $source_text) {
-        $fact_tokens = preg_split('/[^a-z0-9]+/i', strtolower((string) $fact));
-        $fact_tokens = array_values(array_filter((array) $fact_tokens, function($t) {
-            return strlen((string) $t) >= 4;
+    private function build_source_fact_index($source_context) {
+        $source_text = trim(implode(' ', array_filter(array(
+            (string) ($source_context['title'] ?? ''),
+            (string) ($source_context['og_title'] ?? ''),
+            (string) ($source_context['description'] ?? ''),
+            (string) ($source_context['text_excerpt'] ?? ''),
+        ))));
+        $source_text = preg_replace('/\s+/', ' ', (string) $source_text);
+        $sentences = preg_split('/(?<=[\.\!\?\:\;])\s+|\s+\|\s+|\s+[-]{2,}\s+/u', (string) $source_text);
+        $indexed = array();
+        foreach ((array) $sentences as $sentence) {
+            $sentence = trim((string) $sentence);
+            if ($sentence === '') {
+                continue;
+            }
+            $indexed[] = array(
+                'text' => $sentence,
+                'normalized' => strtolower($sentence),
+                'tokens' => $this->fact_tokens($sentence),
+            );
+        }
+        return array(
+            'source_text' => $source_text,
+            'sentences' => $indexed,
+        );
+    }
+
+    private function fact_tokens($value) {
+        $tokens = preg_split('/[^a-z0-9\$\.\-]+/i', strtolower((string) $value));
+        $tokens = array_values(array_filter((array) $tokens, function($token) {
+            return strlen((string) $token) >= 3 || preg_match('/^\$?\d+(?:\.\d+)?$/', (string) $token);
         }));
+        return array_values(array_unique($tokens));
+    }
+
+    private function find_fact_evidence($fact, $fact_index, $keywords = array()) {
+        $fact = sanitize_text_field((string) $fact);
+        if ($fact === '' || empty($fact_index['sentences'])) {
+            return '';
+        }
+
+        $fact_normalized = strtolower($fact);
+        $fact_tokens = $this->fact_tokens($fact);
         if (empty($fact_tokens)) {
             return '';
         }
 
-        $best_pos = null;
-        $best_token = '';
-        $haystack = strtolower((string) $source_text);
-        foreach ($fact_tokens as $token) {
-            $pos = strpos($haystack, $token);
-            if ($pos !== false && ($best_pos === null || $pos < $best_pos)) {
-                $best_pos = $pos;
-                $best_token = $token;
+        $required_keywords = array_values(array_filter(array_map('strtolower', (array) $keywords)));
+        $best = '';
+        $best_score = 0;
+        foreach ((array) $fact_index['sentences'] as $sentence) {
+            $sentence_text = (string) ($sentence['text'] ?? '');
+            $sentence_normalized = (string) ($sentence['normalized'] ?? '');
+            $sentence_tokens = !empty($sentence['tokens']) ? (array) $sentence['tokens'] : array();
+            if ($sentence_text === '' || empty($sentence_tokens)) {
+                continue;
+            }
+
+            $overlap = array_values(array_intersect($fact_tokens, $sentence_tokens));
+            $score = count($overlap);
+            if ($score === 0) {
+                continue;
+            }
+
+            if (preg_match_all('/\$?\d+(?:\.\d+)?/', $fact, $fact_numbers) && !empty($fact_numbers[0])) {
+                $number_match = false;
+                foreach ((array) $fact_numbers[0] as $number) {
+                    if (strpos($sentence_text, (string) $number) !== false) {
+                        $number_match = true;
+                        $score += 3;
+                    }
+                }
+                if (!$number_match && preg_match('/\$|\busd\b|\beur\b|\bgbp\b/i', $fact)) {
+                    continue;
+                }
+            }
+
+            foreach ($required_keywords as $keyword) {
+                if ($keyword !== '' && strpos($fact_normalized, $keyword) !== false && strpos($sentence_normalized, $keyword) !== false) {
+                    $score += 1;
+                }
+            }
+
+            if (count($fact_tokens) >= 3 && count($overlap) < 2 && !preg_match('/\$|\d/', $fact)) {
+                continue;
+            }
+
+            if ($score > $best_score) {
+                $best_score = $score;
+                $best = $sentence_text;
             }
         }
-        if ($best_pos === null || $best_token === '') {
-            return '';
-        }
 
-        $start = max(0, $best_pos - 80);
-        $snippet = substr((string) $source_text, $start, 180);
-        $snippet = preg_replace('/\s+/', ' ', (string) $snippet);
-        $snippet = trim((string) $snippet);
-        return $snippet !== '' ? $snippet : '';
+        return $best_score >= 2 ? $best : '';
     }
 
     private function extract_font_name_from_title($title) {
@@ -1812,6 +1861,25 @@ trait KACO_AI_Generator_Trait {
         $last_scheduled_gmt = (string) get_option('kaco_automation_last_scheduled_gmt', '');
         $now_gmt = current_time('timestamp', true);
         $base_timestamp = $now_gmt;
+
+        $latest_future = get_posts(array(
+            'post_type' => 'post',
+            'post_status' => 'future',
+            'posts_per_page' => 1,
+            'orderby' => 'date',
+            'order' => 'DESC',
+            'fields' => 'ids',
+            'no_found_rows' => true,
+        ));
+        if (!empty($latest_future[0])) {
+            $future_post = get_post((int) $latest_future[0]);
+            if ($future_post && !empty($future_post->post_date_gmt) && $future_post->post_date_gmt !== '0000-00-00 00:00:00') {
+                $future_timestamp = strtotime((string) $future_post->post_date_gmt . ' UTC');
+                if ($future_timestamp !== false) {
+                    $base_timestamp = max($base_timestamp, (int) $future_timestamp);
+                }
+            }
+        }
 
         if ($last_scheduled_gmt !== '') {
             $last_timestamp = strtotime($last_scheduled_gmt . ' UTC');

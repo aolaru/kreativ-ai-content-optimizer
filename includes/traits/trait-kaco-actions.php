@@ -555,9 +555,12 @@ trait KACO_Actions_Trait {
             $this->redirect_with_notice('Category rollback data not found.', 'categories');
         }
 
-        wp_update_term($term_id, 'category', array(
+        $term_update = wp_update_term($term_id, 'category', array(
             'description' => wp_kses_post((string) ($item['previous_description'] ?? '')),
         ));
+        if (is_wp_error($term_update)) {
+            $this->redirect_with_notice('Category rollback failed: ' . $term_update->get_error_message(), 'categories');
+        }
         unset($history[$term_id]);
         update_option('kaco_term_history', $history, false);
         $this->redirect_with_notice('Category description rolled back.', 'categories');
@@ -601,23 +604,41 @@ trait KACO_Actions_Trait {
             $this->redirect_with_notice('Tag merge could not be prepared.', 'tags');
         }
 
+        $original_terms = array();
         foreach ($plan['posts'] as $post_id => $merge_names) {
             $current = wp_get_post_terms((int) $post_id, 'post_tag', array('fields' => 'ids'));
             if (is_wp_error($current)) {
-                continue;
+                $this->redirect_with_notice('Tag merge failed while reading tags for post #' . (int) $post_id . ': ' . $current->get_error_message(), 'tags');
             }
+            $original_terms[(int) $post_id] = array_map('intval', $current);
             $new_ids = array_values(array_unique(array_merge(array((int) $plan['keep_term_id']), array_diff(array_map('intval', $current), $plan['merge_term_ids']))));
-            wp_set_post_terms((int) $post_id, $new_ids, 'post_tag', false);
+            $set_result = wp_set_post_terms((int) $post_id, $new_ids, 'post_tag', false);
+            if (is_wp_error($set_result)) {
+                foreach ($original_terms as $restore_post_id => $restore_ids) {
+                    wp_set_post_terms((int) $restore_post_id, array_values(array_unique(array_map('intval', $restore_ids))), 'post_tag', false);
+                }
+                $this->redirect_with_notice('Tag merge failed while updating post #' . (int) $post_id . ': ' . $set_result->get_error_message(), 'tags');
+            }
         }
 
         $history = $this->get_tag_merge_history();
         $merge_id = uniqid('merge_', true);
         $history[$merge_id] = $plan;
         $history[$merge_id]['created_at'] = current_time('mysql', true);
+        $history[$merge_id]['original_terms'] = $original_terms;
         update_option('kaco_tag_merge_history', $history, false);
 
         foreach ($plan['merge_term_ids'] as $merge_term_id) {
-            wp_delete_term((int) $merge_term_id, 'post_tag');
+            $deleted = wp_delete_term((int) $merge_term_id, 'post_tag');
+            if (is_wp_error($deleted) || !$deleted) {
+                foreach ($original_terms as $restore_post_id => $restore_ids) {
+                    wp_set_post_terms((int) $restore_post_id, array_values(array_unique(array_map('intval', $restore_ids))), 'post_tag', false);
+                }
+                unset($history[$merge_id]);
+                update_option('kaco_tag_merge_history', $history, false);
+                $message = is_wp_error($deleted) ? $deleted->get_error_message() : 'delete failed';
+                $this->redirect_with_notice('Tag merge failed while deleting merged tags: ' . $message, 'tags');
+            }
         }
 
         $this->redirect_with_notice('Tag merge applied.', 'tags');
@@ -646,17 +667,25 @@ trait KACO_Actions_Trait {
         }
 
         foreach ((array) $plan['posts'] as $post_id => $merge_names) {
-            $current = wp_get_post_terms((int) $post_id, 'post_tag', array('fields' => 'ids'));
-            if (is_wp_error($current)) {
-                continue;
-            }
-            $new_ids = array_map('intval', $current);
-            foreach ((array) $merge_names as $name) {
-                if (!empty($restored_ids[$name])) {
-                    $new_ids[] = (int) $restored_ids[$name];
+            $restore_ids = array();
+            if (!empty($plan['original_terms'][(int) $post_id]) && is_array($plan['original_terms'][(int) $post_id])) {
+                $restore_ids = array_map('intval', $plan['original_terms'][(int) $post_id]);
+            } else {
+                $current = wp_get_post_terms((int) $post_id, 'post_tag', array('fields' => 'ids'));
+                if (is_wp_error($current)) {
+                    $this->redirect_with_notice('Tag merge rollback failed while reading tags for post #' . (int) $post_id . ': ' . $current->get_error_message(), 'tags');
+                }
+                $restore_ids = array_map('intval', $current);
+                foreach ((array) $merge_names as $name) {
+                    if (!empty($restored_ids[$name])) {
+                        $restore_ids[] = (int) $restored_ids[$name];
+                    }
                 }
             }
-            wp_set_post_terms((int) $post_id, array_values(array_unique($new_ids)), 'post_tag', false);
+            $set_result = wp_set_post_terms((int) $post_id, array_values(array_unique($restore_ids)), 'post_tag', false);
+            if (is_wp_error($set_result)) {
+                $this->redirect_with_notice('Tag merge rollback failed while updating post #' . (int) $post_id . ': ' . $set_result->get_error_message(), 'tags');
+            }
         }
 
         unset($history[$merge_id]);
@@ -796,8 +825,8 @@ trait KACO_Actions_Trait {
         $suggestion_id = (int) ($_POST['suggestion_id'] ?? 0);
         $row = $this->get_suggestion($suggestion_id);
 
-        if (!$row || $row['status'] !== 'pending') {
-            $this->redirect_with_notice('Suggestion not found or not pending.', 'suggestions');
+        if (!$row || !in_array($row['status'], array('pending', 'needs_review'), true)) {
+            $this->redirect_with_notice('Suggestion not found or not rejectable.', 'suggestions');
         }
 
         $this->reject_suggestion_row($row);
