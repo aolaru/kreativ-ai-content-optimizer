@@ -152,51 +152,10 @@ trait KACO_AI_Generator_Trait {
             ),
         ));
 
-        $body = array(
-            'model' => $model,
-            'response_format' => array('type' => 'json_object'),
-            'temperature' => 0.2,
-            'messages' => array(
-                array('role' => 'system', 'content' => $system_prompt),
-                array('role' => 'user', 'content' => $user_prompt),
-            ),
-        );
-
-        $response = wp_remote_post($endpoint, array(
-            'timeout' => 60,
-            'headers' => array(
-                'Authorization' => 'Bearer ' . $api_key,
-                'Content-Type' => 'application/json',
-            ),
-            'body' => wp_json_encode($body),
-        ));
-
-        if (is_wp_error($response)) {
-            return false;
-        }
-
-        $code = (int) wp_remote_retrieve_response_code($response);
-        $raw = (string) wp_remote_retrieve_body($response);
-        if ($code < 200 || $code >= 300 || $raw === '') {
-            return false;
-        }
-
-        $json = json_decode($raw, true);
-        $content = '';
-
-        if (!empty($json['choices'][0]['message']['content'])) {
-            $content = (string) $json['choices'][0]['message']['content'];
-        }
-
-        if ($content === '') {
-            return false;
-        }
-
-        $decoded = json_decode($content, true);
+        $decoded = $this->request_openai_json_payload($api_key, $endpoint, $model, $system_prompt, $user_prompt);
         if (!is_array($decoded)) {
             return false;
         }
-
         return $this->sanitize_ai_payload($decoded);
     }
 
@@ -394,42 +353,7 @@ trait KACO_AI_Generator_Trait {
             'editorial_style_guide' => $editorial_style_guide,
         ));
 
-        $body = array(
-            'model' => $model,
-            'response_format' => array('type' => 'json_object'),
-            'temperature' => 0.2,
-            'messages' => array(
-                array('role' => 'system', 'content' => $system_prompt),
-                array('role' => 'user', 'content' => $user_prompt),
-            ),
-        );
-
-        $response = wp_remote_post($endpoint, array(
-            'timeout' => 60,
-            'headers' => array(
-                'Authorization' => 'Bearer ' . $api_key,
-                'Content-Type' => 'application/json',
-            ),
-            'body' => wp_json_encode($body),
-        ));
-
-        if (is_wp_error($response)) {
-            return false;
-        }
-
-        $code = (int) wp_remote_retrieve_response_code($response);
-        $raw = (string) wp_remote_retrieve_body($response);
-        if ($code < 200 || $code >= 300 || $raw === '') {
-            return false;
-        }
-
-        $json = json_decode($raw, true);
-        $content = !empty($json['choices'][0]['message']['content']) ? (string) $json['choices'][0]['message']['content'] : '';
-        if ($content === '') {
-            return false;
-        }
-
-        $decoded = json_decode($content, true);
+        $decoded = $this->request_openai_json_payload($api_key, $endpoint, $model, $system_prompt, $user_prompt);
         if (!is_array($decoded)) {
             return false;
         }
@@ -2168,51 +2092,129 @@ trait KACO_AI_Generator_Trait {
             return false;
         }
 
-        $body = array(
-            'model' => $model,
-            'response_format' => array('type' => 'json_object'),
-            'temperature' => 0.2,
-            'messages' => array(
-                array('role' => 'system', 'content' => 'You write concise SEO-aware WordPress category descriptions for a font marketplace. Return valid minified JSON only.'),
-                array('role' => 'user', 'content' => wp_json_encode(array(
-                    'task' => 'Write a category description.',
-                    'output_schema' => array('description' => 'string'),
-                    'term' => array(
-                        'id' => (int) $term->term_id,
-                        'taxonomy' => 'category',
-                        'name' => (string) $term->name,
-                        'slug' => (string) $term->slug,
-                        'count' => (int) $term->count,
-                        'current_description' => (string) $term->description,
-                    ),
-                    'constraints' => array('2_to_4_sentences', 'specific_to_font_category', 'no_keyword_stuffing', 'no_markdown'),
-                ))),
-            ),
+        $decoded = $this->request_openai_json_payload(
+            $api_key,
+            $endpoint,
+            $model,
+            'You write concise SEO-aware WordPress category descriptions for a font marketplace. Return valid minified JSON only.',
+            wp_json_encode(array(
+                'task' => 'Write a category description.',
+                'output_schema' => array('description' => 'string'),
+                'term' => array(
+                    'id' => (int) $term->term_id,
+                    'taxonomy' => 'category',
+                    'name' => (string) $term->name,
+                    'slug' => (string) $term->slug,
+                    'count' => (int) $term->count,
+                    'current_description' => (string) $term->description,
+                ),
+                'constraints' => array('2_to_4_sentences', 'specific_to_font_category', 'no_keyword_stuffing', 'no_markdown'),
+            ))
         );
+        if (!is_array($decoded) || empty($decoded['description'])) {
+            return false;
+        }
+        return wp_kses_post((string) $decoded['description']);
+    }
 
+    private function request_openai_json_payload($api_key, $endpoint, $model, $system_prompt, $user_prompt) {
+        $endpoint = trim((string) $endpoint);
+        $body = $this->build_openai_request_body($endpoint, $model, $system_prompt, $user_prompt);
         $response = wp_remote_post($endpoint, array(
             'timeout' => 60,
-            'headers' => array('Authorization' => 'Bearer ' . $api_key, 'Content-Type' => 'application/json'),
+            'headers' => array(
+                'Authorization' => 'Bearer ' . $api_key,
+                'Content-Type' => 'application/json',
+            ),
             'body' => wp_json_encode($body),
         ));
+
         if (is_wp_error($response)) {
             return false;
         }
+
         $code = (int) wp_remote_retrieve_response_code($response);
         $raw = (string) wp_remote_retrieve_body($response);
         if ($code < 200 || $code >= 300 || $raw === '') {
             return false;
         }
+
         $json = json_decode($raw, true);
-        $content = !empty($json['choices'][0]['message']['content']) ? (string) $json['choices'][0]['message']['content'] : '';
+        if (!is_array($json)) {
+            return false;
+        }
+
+        $content = $this->extract_openai_response_content($endpoint, $json);
         if ($content === '') {
             return false;
         }
+
         $decoded = json_decode($content, true);
-        if (!is_array($decoded) || empty($decoded['description'])) {
-            return false;
+        return is_array($decoded) ? $decoded : false;
+    }
+
+    private function build_openai_request_body($endpoint, $model, $system_prompt, $user_prompt) {
+        if ($this->is_responses_endpoint($endpoint)) {
+            return array(
+                'model' => $model,
+                'text' => array(
+                    'format' => array('type' => 'json_object'),
+                ),
+                'input' => array(
+                    array(
+                        'role' => 'system',
+                        'content' => array(
+                            array(
+                                'type' => 'input_text',
+                                'text' => (string) $system_prompt,
+                            ),
+                        ),
+                    ),
+                    array(
+                        'role' => 'user',
+                        'content' => array(
+                            array(
+                                'type' => 'input_text',
+                                'text' => (string) $user_prompt,
+                            ),
+                        ),
+                    ),
+                ),
+            );
         }
-        return wp_kses_post((string) $decoded['description']);
+
+        return array(
+            'model' => $model,
+            'response_format' => array('type' => 'json_object'),
+            'temperature' => 0.2,
+            'messages' => array(
+                array('role' => 'system', 'content' => (string) $system_prompt),
+                array('role' => 'user', 'content' => (string) $user_prompt),
+            ),
+        );
+    }
+
+    private function extract_openai_response_content($endpoint, $json) {
+        if ($this->is_responses_endpoint($endpoint)) {
+            $content = '';
+            foreach ((array) ($json['output'] ?? array()) as $item) {
+                if (($item['type'] ?? '') !== 'message') {
+                    continue;
+                }
+                foreach ((array) ($item['content'] ?? array()) as $part) {
+                    if (($part['type'] ?? '') === 'output_text' && !empty($part['text'])) {
+                        $content .= (string) $part['text'];
+                    }
+                }
+            }
+            return trim($content);
+        }
+
+        return !empty($json['choices'][0]['message']['content']) ? (string) $json['choices'][0]['message']['content'] : '';
+    }
+
+    private function is_responses_endpoint($endpoint) {
+        return strpos((string) $endpoint, '/responses') !== false;
     }
 
     private function sanitize_ai_payload($payload) {

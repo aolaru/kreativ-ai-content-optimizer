@@ -16,13 +16,14 @@ final class KACO_Plugin {
     const VERSION = '1.0.0';
     const TABLE = 'kaco_suggestions';
     const NONCE_ACTION = 'kaco_admin_action';
-    const OPENAI_ENDPOINT = 'https://api.openai.com/v1/chat/completions';
-    const OPENAI_MODEL = 'gpt-4.1-mini';
+    const OPENAI_ENDPOINT = 'https://api.openai.com/v1/responses';
+    const OPENAI_MODEL = 'gpt-5-mini';
 
     private $plugin_file;
 
     public function __construct($plugin_file) {
         $this->plugin_file = $plugin_file;
+        $this->migrate_default_openai_settings();
         register_activation_hook($this->plugin_file, array($this, 'activate'));
         register_deactivation_hook($this->plugin_file, array($this, 'deactivate'));
         add_action('admin_menu', array($this, 'register_admin_menu'));
@@ -128,6 +129,7 @@ final class KACO_Plugin {
         add_option('kaco_hierarchy_cleanup_history', array());
 
         $this->ensure_automation_schedule();
+        $this->migrate_default_openai_settings();
     }
 
     public function deactivate() {
@@ -215,6 +217,18 @@ final class KACO_Plugin {
 
     private function clear_automation_schedule() {
         wp_clear_scheduled_hook('kaco_automation_event');
+    }
+
+    private function migrate_default_openai_settings() {
+        $current_model = get_option('kaco_openai_model', '');
+        if ($current_model === '' || $current_model === 'gpt-4.1-mini') {
+            update_option('kaco_openai_model', self::OPENAI_MODEL, false);
+        }
+
+        $current_endpoint = get_option('kaco_openai_endpoint', '');
+        if ($current_endpoint === '' || $current_endpoint === 'https://api.openai.com/v1/chat/completions') {
+            update_option('kaco_openai_endpoint', self::OPENAI_ENDPOINT, false);
+        }
     }
 
     private function sanitize_automation_frequency($value) {
