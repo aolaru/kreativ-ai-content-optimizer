@@ -2,9 +2,137 @@
 
 trait KACO_Admin_UI_Trait {
     private function tab_link($slug, $label, $current) {
-        $class = $slug === $current ? 'nav-tab nav-tab-active' : 'nav-tab';
+        $grouped = array(
+            'dashboard' => array('dashboard'),
+            'create' => array('create', 'generator'),
+            'refresh' => array('refresh', 'audit'),
+            'review' => array('review', 'exceptions', 'suggestions'),
+            'taxonomy' => array('taxonomy', 'cleanup', 'categories', 'tags'),
+            'settings' => array('settings'),
+        );
+        $is_active = in_array($current, $grouped[$slug] ?? array($slug), true);
+        $class = $is_active ? 'nav-tab nav-tab-active' : 'nav-tab';
         $url = admin_url('admin.php?page=kaco-dashboard&view=' . $slug);
         echo '<a class="' . esc_attr($class) . '" href="' . esc_url($url) . '">' . esc_html($label) . '</a>';
+    }
+
+    private function render_dashboard_view() {
+        global $wpdb;
+
+        $table = $this->table_name();
+        $pending = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table} WHERE status = 'pending'");
+        $needs_review = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table} WHERE status = 'needs_review'");
+        $approved = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table} WHERE status = 'approved'");
+        $applied = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table} WHERE status = 'applied'");
+        $generator_review = count($this->get_generator_automation_review());
+        $url_inbox = count($this->get_generator_url_inbox());
+        $cleanup_plan = $this->get_hierarchy_cleanup_plan();
+        $cleanup_rows = !empty($cleanup_plan['rows']) && is_array($cleanup_plan['rows']) ? count($cleanup_plan['rows']) : 0;
+        $logs = $this->get_automation_logs();
+        $failed_logs = count(array_filter((array) $logs, function($item) {
+            return in_array((string) ($item['status'] ?? ''), array('failed', 'needs_review'), true);
+        }));
+        $automation_last_run = get_option('kaco_automation_last_run', array());
+
+        echo '<h2>Operations dashboard</h2>';
+        echo '<p>Use this plugin in five lanes: create new font posts, refresh existing content, review exceptions and approvals, maintain taxonomy structure, and manage settings.</p>';
+
+        echo '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:20px 0;">';
+        $this->render_dashboard_card('Create', 'URL inbox waiting', (string) $url_inbox, 'Open Create', admin_url('admin.php?page=kaco-dashboard&view=create'));
+        $this->render_dashboard_card('Review', 'Generator exceptions', (string) $generator_review, 'Open Review', admin_url('admin.php?page=kaco-dashboard&view=review'));
+        $this->render_dashboard_card('Review', 'Suggestions needing review', (string) $needs_review, 'Open Review', admin_url('admin.php?page=kaco-dashboard&view=review'));
+        $this->render_dashboard_card('Review', 'Approved and ready to apply', (string) $approved, 'Open Review', admin_url('admin.php?page=kaco-dashboard&view=review'));
+        $this->render_dashboard_card('Refresh', 'Pending suggestions', (string) $pending, 'Open Refresh', admin_url('admin.php?page=kaco-dashboard&view=refresh'));
+        $this->render_dashboard_card('Taxonomy', 'Hierarchy cleanup rows', (string) $cleanup_rows, 'Open Taxonomy', admin_url('admin.php?page=kaco-dashboard&view=taxonomy'));
+        echo '</div>';
+
+        echo '<h3>Current state</h3>';
+        echo '<ul>';
+        echo '<li><strong>New posts:</strong> ' . (int) $url_inbox . ' URL(s) waiting, ' . (int) $generator_review . ' generator review item(s).</li>';
+        echo '<li><strong>Existing posts:</strong> ' . (int) $pending . ' pending, ' . (int) $needs_review . ' needs review, ' . (int) $approved . ' approved, ' . (int) $applied . ' applied.</li>';
+        echo '<li><strong>Automation:</strong> ' . (int) $failed_logs . ' recent failure/review log item(s).</li>';
+        echo '<li><strong>Taxonomy:</strong> ' . (int) $cleanup_rows . ' hierarchy cleanup row(s) in the latest scan.</li>';
+        echo '</ul>';
+
+        if (!empty($automation_last_run) && is_array($automation_last_run)) {
+            echo '<h3>Last automation run</h3>';
+            echo '<p>';
+            echo 'Ran: ' . esc_html((string) ($automation_last_run['ran_at'] ?? '-'));
+            echo ' | Scanned: ' . (int) ($automation_last_run['scanned'] ?? 0);
+            echo ' | Matched: ' . (int) ($automation_last_run['matched'] ?? 0);
+            echo ' | Queued: ' . (int) ($automation_last_run['queued'] ?? 0);
+            if (!empty($automation_last_run['automation']) && is_array($automation_last_run['automation'])) {
+                echo ' | AI generated: ' . (int) ($automation_last_run['automation']['generated'] ?? 0);
+                echo ' | Auto-approved: ' . (int) ($automation_last_run['automation']['approved'] ?? 0);
+                echo ' | Auto-applied: ' . (int) ($automation_last_run['automation']['applied'] ?? 0);
+                echo ' | Failed: ' . (int) ($automation_last_run['automation']['failed'] ?? 0);
+            }
+            if (!empty($automation_last_run['generator_inbox']) && is_array($automation_last_run['generator_inbox'])) {
+                echo ' | Inbox processed: ' . (int) ($automation_last_run['generator_inbox']['processed'] ?? 0);
+                echo ' | Posts created: ' . (int) ($automation_last_run['generator_inbox']['created'] ?? 0);
+            }
+            echo '</p>';
+        }
+
+        echo '<h3>Main paths</h3>';
+        echo '<ol>';
+        echo '<li><strong>Create:</strong> add marketplace URLs and let automation schedule high-confidence posts.</li>';
+        echo '<li><strong>Refresh:</strong> scan older posts, queue work, and keep automation thresholds conservative.</li>';
+        echo '<li><strong>Review:</strong> handle only exceptions and approved items that need manual apply oversight.</li>';
+        echo '<li><strong>Taxonomy:</strong> clean hierarchy drift, category descriptions, and tags as maintenance.</li>';
+        echo '</ol>';
+    }
+
+    private function render_dashboard_card($lane, $label, $value, $action_label, $action_url) {
+        echo '<div style="background:#fff;border:1px solid #dcdcde;padding:16px;">';
+        echo '<div style="font-size:12px;text-transform:uppercase;color:#50575e;margin-bottom:6px;">' . esc_html($lane) . '</div>';
+        echo '<div style="font-size:14px;color:#1d2327;margin-bottom:6px;">' . esc_html($label) . '</div>';
+        echo '<div style="font-size:28px;font-weight:600;margin-bottom:10px;">' . esc_html($value) . '</div>';
+        echo '<a href="' . esc_url($action_url) . '">' . esc_html($action_label) . '</a>';
+        echo '</div>';
+    }
+
+    private function render_refresh_view() {
+        echo '<h2>Refresh existing posts</h2>';
+        echo '<p>Use this lane for older content. First run audits, then review or apply queued suggestions. Automation status is shown below so you can see whether the queue is moving without manual intervention.</p>';
+        $this->render_audit_view();
+
+        $automation_last_run = get_option('kaco_automation_last_run', array());
+        if (!empty($automation_last_run) && is_array($automation_last_run)) {
+            echo '<hr style="margin:24px 0;" />';
+            echo '<h3>Automation status</h3>';
+            echo '<p>';
+            echo 'Ran: ' . esc_html((string) ($automation_last_run['ran_at'] ?? '-'));
+            echo ' | Scanned: ' . (int) ($automation_last_run['scanned'] ?? 0);
+            echo ' | Matched: ' . (int) ($automation_last_run['matched'] ?? 0);
+            echo ' | Queued: ' . (int) ($automation_last_run['queued'] ?? 0);
+            if (!empty($automation_last_run['automation']) && is_array($automation_last_run['automation'])) {
+                echo ' | AI generated: ' . (int) ($automation_last_run['automation']['generated'] ?? 0);
+                echo ' | Auto-approved: ' . (int) ($automation_last_run['automation']['approved'] ?? 0);
+                echo ' | Auto-applied: ' . (int) ($automation_last_run['automation']['applied'] ?? 0);
+                echo ' | Failed: ' . (int) ($automation_last_run['automation']['failed'] ?? 0);
+            }
+            echo '</p>';
+            echo '<p><a href="' . esc_url(admin_url('admin.php?page=kaco-dashboard&view=review')) . '">Open Review</a></p>';
+        }
+    }
+
+    private function render_review_view() {
+        echo '<h2>Review center</h2>';
+        echo '<p>This lane combines manual review work: low-confidence exceptions, automation failures, and the main suggestions queue.</p>';
+        $this->render_exceptions_view();
+        echo '<hr style="margin:24px 0;" />';
+        $this->render_suggestions_view();
+    }
+
+    private function render_taxonomy_view() {
+        echo '<h2>Taxonomy maintenance</h2>';
+        echo '<p>Use this lane for archive health, not daily publishing. It groups hierarchy cleanup, category descriptions, and tag hygiene in one place.</p>';
+        $this->render_hierarchy_cleanup_view();
+        echo '<hr style="margin:24px 0;" />';
+        $this->render_categories_view();
+        echo '<hr style="margin:24px 0;" />';
+        $this->render_tags_view();
     }
 
     private function render_audit_view() {

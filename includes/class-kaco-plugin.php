@@ -153,7 +153,7 @@ final class KACO_Plugin {
             wp_die('Insufficient permissions.');
         }
 
-        $view = isset($_GET['view']) ? sanitize_text_field(wp_unslash($_GET['view'])) : 'audit';
+        $view = isset($_GET['view']) ? sanitize_text_field(wp_unslash($_GET['view'])) : 'dashboard';
         $notice = isset($_GET['kaco_notice']) ? sanitize_text_field(wp_unslash($_GET['kaco_notice'])) : '';
 
         echo '<div class="wrap">';
@@ -164,32 +164,28 @@ final class KACO_Plugin {
         }
 
         echo '<nav class="nav-tab-wrapper">';
-        $this->tab_link('generator', 'Generator', $view);
-        $this->tab_link('audit', 'Audit & Queue', $view);
-        $this->tab_link('exceptions', 'Exceptions', $view);
-        $this->tab_link('cleanup', 'Hierarchy Cleanup', $view);
-        $this->tab_link('categories', 'Categories', $view);
-        $this->tab_link('tags', 'Tags', $view);
-        $this->tab_link('suggestions', 'Suggestions', $view);
+        $this->tab_link('dashboard', 'Dashboard', $view);
+        $this->tab_link('create', 'Create', $view);
+        $this->tab_link('refresh', 'Refresh', $view);
+        $this->tab_link('review', 'Review', $view);
+        $this->tab_link('taxonomy', 'Taxonomy', $view);
         $this->tab_link('settings', 'Settings', $view);
         echo '</nav>';
 
-        if ($view === 'generator') {
+        if ($view === 'dashboard') {
+            $this->render_dashboard_view();
+        } elseif ($view === 'create' || $view === 'generator') {
             $this->render_generator_view();
-        } elseif ($view === 'exceptions') {
-            $this->render_exceptions_view();
-        } elseif ($view === 'cleanup') {
-            $this->render_hierarchy_cleanup_view();
-        } elseif ($view === 'categories') {
-            $this->render_categories_view();
-        } elseif ($view === 'tags') {
-            $this->render_tags_view();
-        } elseif ($view === 'suggestions') {
-            $this->render_suggestions_view();
+        } elseif ($view === 'refresh' || $view === 'audit') {
+            $this->render_refresh_view();
+        } elseif ($view === 'review' || $view === 'exceptions' || $view === 'suggestions') {
+            $this->render_review_view();
+        } elseif ($view === 'taxonomy' || $view === 'cleanup' || $view === 'categories' || $view === 'tags') {
+            $this->render_taxonomy_view();
         } elseif ($view === 'settings') {
             $this->render_settings_view();
         } else {
-            $this->render_audit_view();
+            $this->render_dashboard_view();
         }
 
         echo '</div>';
