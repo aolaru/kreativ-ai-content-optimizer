@@ -270,6 +270,7 @@ trait KACO_Admin_UI_Trait {
         }
 
         echo '<h3>Review previews</h3>';
+        echo '<p class="description">Successful items disappear automatically after creation. Leave <code>create draft</code> unchecked to keep an item for later, or use <code>remove from review queue</code> to discard it.</p>';
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
         wp_nonce_field(self::NONCE_ACTION);
         echo '<input type="hidden" name="action" value="kaco_create_generated_drafts" />';
@@ -311,7 +312,10 @@ trait KACO_Admin_UI_Trait {
             echo '<p><label><strong>Tags</strong><br/><input type="text" name="previews[' . (int) $index . '][tags]" value="' . esc_attr(implode(', ', (array) ($item['tags'] ?? array()))) . '" class="regular-text" style="width:100%;" /></label></p>';
             echo '<p><label><strong>Page Summary</strong><br/><textarea name="previews[' . (int) $index . '][summary_excerpt]" rows="3" class="large-text">' . esc_textarea((string) ($item['summary_excerpt'] ?? '')) . '</textarea></label></p>';
             echo '<p><label><strong>Content</strong><br/><textarea name="previews[' . (int) $index . '][content]" rows="18" class="large-text code">' . esc_textarea((string) ($item['content'] ?? '')) . '</textarea></label></p>';
-            echo '<label><input type="checkbox" name="previews[' . (int) $index . '][create]" value="1" checked="checked" /> create draft</label>';
+            echo '<p>';
+            echo '<label style="margin-right:16px;"><input type="checkbox" name="previews[' . (int) $index . '][create]" value="1" checked="checked" /> create draft</label>';
+            echo '<label><input type="checkbox" name="previews[' . (int) $index . '][discard]" value="1" /> remove from review queue</label>';
+            echo '</p>';
             echo '</div>';
         }
 

@@ -203,11 +203,16 @@ trait KACO_AI_Generator_Trait {
 
         $created = 0;
         $skipped = 0;
+        $discarded = 0;
         $errors = array();
         $remaining_manual = array();
         $remaining_automation = array();
         foreach ($previews as $preview) {
             $source = sanitize_key((string) ($preview['preview_source'] ?? 'manual'));
+            if (!empty($preview['discard'])) {
+                $discarded++;
+                continue;
+            }
             if (empty($preview['create'])) {
                 if ($source === 'automation') {
                     $remaining_automation[] = $preview;
@@ -241,10 +246,18 @@ trait KACO_AI_Generator_Trait {
 
         $this->set_generator_previews($remaining_manual);
         $this->set_generator_automation_review($remaining_automation);
-        $notice = $created . ' draft(s) created.';
-        if ($skipped > 0) {
-            $notice .= ' ' . $skipped . ' preview(s) skipped, usually because the source URL already exists or required content was missing.';
+        $remaining_review = count($remaining_manual) + count($remaining_automation);
+        $notice = $created . ' draft(s) created';
+        if ($remaining_review > 0) {
+            $notice .= ', ' . $remaining_review . ' still need review';
         }
+        if ($discarded > 0) {
+            $notice .= ', ' . $discarded . ' removed from queue';
+        }
+        if ($skipped > 0 && $remaining_review === 0) {
+            $notice .= ', ' . $skipped . ' skipped';
+        }
+        $notice .= '.';
         if (!empty($errors)) {
             $notice .= ' Last error: ' . $errors[0];
         }
