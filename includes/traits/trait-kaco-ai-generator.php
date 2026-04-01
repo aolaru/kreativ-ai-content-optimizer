@@ -475,7 +475,7 @@ trait KACO_AI_Generator_Trait {
         return array(
             'url' => esc_url_raw($url),
             'title' => $title,
-            'image_url' => esc_url_raw((string) ($payload['image_url'] ?? '')),
+            'image_url' => esc_url_raw((string) ($payload['image_url'] ?? ($source_context['image_url'] ?? ''))),
             'designer_names' => $designer_names,
             'foundry_name' => $foundry_name,
             'font_style_name' => $font_style_name,
@@ -504,7 +504,7 @@ trait KACO_AI_Generator_Trait {
                 'title' => $title,
                 'font_name' => $font_name,
                 'url' => esc_url_raw($url),
-                'image_url' => esc_url_raw((string) ($payload['image_url'] ?? '')),
+                'image_url' => esc_url_raw((string) ($payload['image_url'] ?? ($source_context['image_url'] ?? ''))),
                 'designer_names' => $designer_names,
                 'foundry_name' => $foundry_name,
                 'font_style_name' => $font_style_name,
@@ -1217,11 +1217,18 @@ trait KACO_AI_Generator_Trait {
             return array();
         }
 
+        $og_image = $this->extract_meta_content($html, array('og:image', 'twitter:image'));
+        $specimen_image = '';
+        if ($this->detect_marketplace_name($url) === 'MyFonts') {
+            $specimen_image = $this->extract_myfonts_specimen_image($html);
+        }
+
         return array(
             'title' => $this->extract_html_title($html),
             'og_title' => $this->extract_meta_content($html, array('og:title', 'twitter:title')),
             'description' => $this->extract_meta_content($html, array('description', 'og:description', 'twitter:description')),
             'text_excerpt' => $this->extract_html_text_excerpt($html, 5000),
+            'image_url' => $specimen_image !== '' ? $specimen_image : $og_image,
         );
     }
 
@@ -1424,6 +1431,32 @@ trait KACO_AI_Generator_Trait {
         if (preg_match('/<title[^>]*>(.*?)<\/title>/is', (string) $html, $matches)) {
             return sanitize_text_field(wp_strip_all_tags(html_entity_decode((string) $matches[1], ENT_QUOTES | ENT_HTML5, 'UTF-8')));
         }
+        return '';
+    }
+
+    private function normalize_myfonts_image_url($url) {
+        $url = esc_url_raw((string) $url);
+        if ($url === '' || strpos($url, 'cdn.myfonts.net/cdn-cgi/image/') === false) {
+            return $url;
+        }
+
+        return preg_replace(
+            '#(https://cdn\.myfonts\.net/cdn-cgi/image/)(?:width=\d+,height=\d+,fit=contain,)?format=auto/#i',
+            '$1format=auto/',
+            $url
+        );
+    }
+
+    private function extract_myfonts_specimen_image($html) {
+        $html = (string) $html;
+        if ($html === '') {
+            return '';
+        }
+
+        if (preg_match('#(https://cdn\.myfonts\.net/cdn-cgi/image/[^"\']+/images/pim/[^"\']+\.(?:jpg|jpeg|png|webp))#i', $html, $matches)) {
+            return $this->normalize_myfonts_image_url((string) $matches[1]);
+        }
+
         return '';
     }
 

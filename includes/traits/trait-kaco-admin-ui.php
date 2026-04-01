@@ -213,31 +213,44 @@ trait KACO_Admin_UI_Trait {
         $previews = $this->get_generator_previews();
         $automation_previews = $this->get_generator_automation_review();
         $inbox = $this->get_generator_url_inbox();
+        $automation_enabled = get_option('kaco_automation_enabled', '0') === '1';
+        $automation_process_inbox = get_option('kaco_automation_process_url_inbox', '1') === '1';
 
         echo '<h2>Font Generator</h2>';
-        echo '<p>Generate draft-ready commercial font posts from marketplace URLs, then review and create drafts inside WordPress.</p>';
+        echo '<p>Generate draft-ready commercial font posts from marketplace URLs, either by handing them to automation for later processing or by generating previews immediately.</p>';
 
-        echo '<h3>URL inbox</h3>';
-        echo '<p>Store raw marketplace URLs here and let automation process them in batches.</p>';
-        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
-        wp_nonce_field(self::NONCE_ACTION);
-        echo '<input type="hidden" name="action" value="kaco_add_generator_urls_to_inbox" />';
-        echo '<table class="form-table" role="presentation"><tbody>';
-        echo '<tr><th scope="row"><label for="kaco_generator_inbox_urls">Inbox URLs</label></th>';
-        echo '<td><textarea id="kaco_generator_inbox_urls" name="kaco_generator_inbox_urls" rows="5" cols="100" class="large-text code" placeholder="https://www.myfonts.com/...&#10;https://creativemarket.com/..."></textarea>';
-        echo '<p class="description">One URL per line. Duplicates already in the inbox are skipped.</p></td></tr>';
-        echo '</tbody></table>';
-        submit_button('Add URLs To Inbox', 'secondary', 'submit', false);
-        echo '</form>';
+        echo '<div style="display:grid;grid-template-columns:minmax(0,1fr);gap:24px;">';
 
-        echo '<p><strong>Inbox status:</strong> ' . count($inbox) . ' URL(s) waiting';
-        if (!empty($inbox)) {
-            echo '<br/>' . esc_html(implode(' | ', array_slice($inbox, 0, 5)));
-            if (count($inbox) > 5) {
-                echo ' ...';
+        if ($automation_enabled && $automation_process_inbox) {
+            echo '<div style="background:#fff;border:1px solid #dcdcde;padding:16px;">';
+            echo '<h3 style="margin-top:0;">Process later</h3>';
+            echo '<p><strong>Automation Queue</strong></p>';
+            echo '<p class="description" style="margin-top:0;">Paste raw marketplace URLs here. Automation will process them later in scheduled batches instead of generating previews right now.</p>';
+            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+            wp_nonce_field(self::NONCE_ACTION);
+            echo '<input type="hidden" name="action" value="kaco_add_generator_urls_to_inbox" />';
+            echo '<table class="form-table" role="presentation"><tbody>';
+            echo '<tr><th scope="row"><label for="kaco_generator_inbox_urls">Automation Queue URLs</label></th>';
+            echo '<td><textarea id="kaco_generator_inbox_urls" name="kaco_generator_inbox_urls" rows="5" cols="100" class="large-text code" placeholder="https://www.myfonts.com/...&#10;https://creativemarket.com/..."></textarea>';
+            echo '<p class="description">One URL per line. Duplicates already in the queue are skipped.</p></td></tr>';
+            echo '</tbody></table>';
+            submit_button('Add URLs To Automation Queue', 'secondary', 'submit', false);
+            echo '</form>';
+
+            echo '<p><strong>Queue status:</strong> ' . count($inbox) . ' URL(s) waiting';
+            if (!empty($inbox)) {
+                echo '<br/>' . esc_html(implode(' | ', array_slice($inbox, 0, 5)));
+                if (count($inbox) > 5) {
+                    echo ' ...';
+                }
             }
+            echo '</p>';
+            echo '</div>';
         }
-        echo '</p>';
+
+        echo '<div style="background:#fff;border:1px solid #dcdcde;padding:16px;">';
+        echo '<h3 style="margin-top:0;">Generate now</h3>';
+        echo '<p class="description" style="margin-top:0;">Use this when you want immediate previews and manual control instead of waiting for automation.</p>';
 
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
         wp_nonce_field(self::NONCE_ACTION);
@@ -249,6 +262,8 @@ trait KACO_Admin_UI_Trait {
         echo '</tbody></table>';
         submit_button('Generate Draft Previews');
         echo '</form>';
+        echo '</div>';
+        echo '</div>';
 
         if (empty($previews) && empty($automation_previews)) {
             return;
