@@ -29,6 +29,7 @@ final class KACO_Plugin {
         add_action('admin_menu', array($this, 'register_admin_menu'));
         add_action('kaco_automation_event', array($this, 'handle_automation_event'));
         add_action('admin_post_kaco_add_generator_urls_to_inbox', array($this, 'handle_add_generator_urls_to_inbox'));
+        add_action('admin_post_kaco_process_generator_queue_now', array($this, 'handle_process_generator_queue_now'));
         add_action('admin_post_kaco_generate_font_previews', array($this, 'handle_generate_font_previews'));
         add_action('admin_post_kaco_create_generated_drafts', array($this, 'handle_create_generated_drafts'));
         add_action('admin_post_kaco_run_audit', array($this, 'handle_run_audit'));

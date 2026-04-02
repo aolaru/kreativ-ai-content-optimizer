@@ -1,6 +1,30 @@
 <?php
 
 trait KACO_Actions_Trait {
+    public function handle_process_generator_queue_now() {
+        $this->require_admin_request();
+
+        if (get_option('kaco_automation_process_url_inbox', '1') !== '1') {
+            $this->redirect_with_notice('Automation Queue processing is disabled in settings.', 'create');
+        }
+
+        $summary = $this->process_generator_url_inbox();
+        $last_run = get_option('kaco_automation_last_run', array());
+        if (!is_array($last_run)) {
+            $last_run = array();
+        }
+        $last_run['ran_at'] = current_time('mysql', true);
+        $last_run['generator_inbox'] = $summary;
+        update_option('kaco_automation_last_run', $last_run, false);
+
+        $message = 'Automation Queue processed: '
+            . (int) ($summary['processed'] ?? 0) . ' URL(s), '
+            . (int) ($summary['created'] ?? 0) . ' created, '
+            . (int) ($summary['queued_for_review'] ?? 0) . ' queued for review, '
+            . (int) ($summary['remaining_inbox'] ?? 0) . ' remaining.';
+        $this->redirect_with_notice($message, 'create');
+    }
+
     public function handle_scan_hierarchy_cleanup() {
         $this->require_admin_request();
 

@@ -245,6 +245,13 @@ trait KACO_Admin_UI_Trait {
                 }
             }
             echo '</p>';
+
+            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin-top:12px;">';
+            wp_nonce_field(self::NONCE_ACTION);
+            echo '<input type="hidden" name="action" value="kaco_process_generator_queue_now" />';
+            submit_button('Process Automation Queue Now', 'secondary', 'submit', false);
+            echo '</form>';
+            echo '<p class="description">Use this when you want the queue processed immediately instead of waiting for WP-Cron.</p>';
             echo '</div>';
         }
 
