@@ -157,6 +157,50 @@ trait KACO_Actions_Trait {
         $this->redirect_with_notice('Hierarchy cleanup applied to ' . $applied . ' posts.', 'cleanup');
     }
 
+    public function handle_export_hierarchy_cleanup_csv() {
+        $this->require_admin_request();
+
+        $plan = $this->get_hierarchy_cleanup_plan();
+        $rows = !empty($plan['rows']) && is_array($plan['rows']) ? $plan['rows'] : array();
+        if (empty($rows)) {
+            $this->redirect_with_notice('No hierarchy cleanup plan is available to export.', 'cleanup');
+        }
+
+        nocache_headers();
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename=hierarchy-cleanup-plan-' . gmdate('Ymd-His') . '.csv');
+
+        $out = fopen('php://output', 'w');
+        fputcsv($out, array(
+            'post_id',
+            'post_title',
+            'edit_url',
+            'current_preview',
+            'proposed_preview',
+            'issues',
+            'changes',
+            'applyable',
+            'review_required',
+        ));
+
+        foreach ($rows as $row) {
+            fputcsv($out, array(
+                (int) ($row['post_id'] ?? 0),
+                (string) ($row['post_title'] ?? ''),
+                (string) ($row['edit_url'] ?? ''),
+                (string) ($row['current_preview'] ?? ''),
+                (string) ($row['proposed_preview'] ?? ''),
+                implode(' | ', (array) ($row['issues'] ?? array())),
+                implode(' | ', (array) ($row['changes'] ?? array())),
+                !empty($row['applyable']) ? 'yes' : 'no',
+                !empty($row['review_required']) ? 'yes' : 'no',
+            ));
+        }
+
+        fclose($out);
+        exit;
+    }
+
     public function handle_rollback_hierarchy_cleanup() {
         $this->require_admin_request();
 

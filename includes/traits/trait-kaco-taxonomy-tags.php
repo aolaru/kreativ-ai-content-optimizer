@@ -1,6 +1,116 @@
 <?php
 
 trait KACO_Taxonomy_Tags_Trait {
+    private function build_taxonomy_health_snapshot() {
+        $cleanup_plan = $this->get_hierarchy_cleanup_plan();
+        $cleanup_rows = !empty($cleanup_plan['rows']) && is_array($cleanup_plan['rows']) ? $cleanup_plan['rows'] : array();
+        $duplicate_like_tags = $this->find_duplicate_like_tags();
+        $duplicate_like_categories = $this->find_duplicate_like_categories();
+        $category_overlap_tags = $this->find_category_overlap_tags();
+        $over_tagged_posts = $this->find_over_tagged_posts((int) get_option('kaco_tag_max_per_post', 12));
+        $category_description_gaps = $this->count_category_description_gaps((int) get_option('kaco_category_desc_min_chars', 120));
+
+        return array(
+            'hierarchy_rows' => count($cleanup_rows),
+            'category_description_gaps' => $category_description_gaps,
+            'duplicate_category_groups' => count($duplicate_like_categories),
+            'duplicate_tag_groups' => count(array_filter($duplicate_like_tags, function($terms) {
+                return count((array) $terms) > 1;
+            })),
+            'category_overlap_tags' => count($category_overlap_tags),
+            'over_tagged_posts' => count($over_tagged_posts),
+        );
+    }
+
+    private function count_category_description_gaps($min_chars) {
+        $terms = get_terms(array(
+            'taxonomy' => 'category',
+            'hide_empty' => false,
+            'fields' => 'all',
+        ));
+        if (is_wp_error($terms) || empty($terms)) {
+            return 0;
+        }
+
+        $count = 0;
+        foreach ((array) $terms as $term) {
+            if (!$term || is_wp_error($term)) {
+                continue;
+            }
+            if (strlen(trim((string) $term->description)) < (int) $min_chars) {
+                $count++;
+            }
+        }
+        return $count;
+    }
+
+    private function find_duplicate_like_categories() {
+        if (!taxonomy_exists('category')) {
+            return array();
+        }
+
+        $targets = $this->font_category_parent_targets();
+        $groups = array();
+        foreach (array(
+            'designer' => $targets['designer'],
+            'foundry' => $targets['foundry'],
+            'font_style' => $targets['font_style'],
+            'font_mood' => $targets['font_mood'],
+            'font_use_case' => $targets['font_use_case'],
+        ) as $branch_key => $parent_name) {
+            $parent_term = $this->find_category_by_name($parent_name);
+            if (!$parent_term) {
+                continue;
+            }
+
+            $children = get_terms(array(
+                'taxonomy' => 'category',
+                'hide_empty' => false,
+                'parent' => (int) $parent_term->term_id,
+            ));
+            if (is_wp_error($children) || empty($children)) {
+                continue;
+            }
+
+            $normalized_groups = array();
+            foreach ((array) $children as $child) {
+                if (!$child || is_wp_error($child)) {
+                    continue;
+                }
+                $normalized = $this->normalize_term_name((string) $child->name);
+                if ($normalized === '') {
+                    continue;
+                }
+                if (!isset($normalized_groups[$normalized])) {
+                    $normalized_groups[$normalized] = array();
+                }
+                $normalized_groups[$normalized][] = $child;
+            }
+
+            foreach ($normalized_groups as $normalized => $terms) {
+                if (count($terms) < 2) {
+                    continue;
+                }
+                usort($terms, function($a, $b) {
+                    return (int) $b->count <=> (int) $a->count;
+                });
+                $keep = $terms[0];
+                $merge = array_slice($terms, 1);
+                $groups[] = array(
+                    'branch_key' => $branch_key,
+                    'branch_label' => ucwords(str_replace('_', ' ', $branch_key)),
+                    'parent_term_id' => (int) $parent_term->term_id,
+                    'parent_name' => (string) $parent_term->name,
+                    'normalized' => $normalized,
+                    'keep' => $keep,
+                    'merge' => $merge,
+                );
+            }
+        }
+
+        return $groups;
+    }
+
     private function build_tag_merge_plan_from_request() {
         $keep_term_id = (int) ($_POST['keep_term_id'] ?? 0);
         $merge_term_ids = !empty($_POST['merge_term_ids']) && is_array($_POST['merge_term_ids']) ? array_values(array_unique(array_map('intval', (array) $_POST['merge_term_ids']))) : array();

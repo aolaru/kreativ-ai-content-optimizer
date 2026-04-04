@@ -39,6 +39,7 @@ final class KACO_Plugin {
         add_action('admin_post_kaco_run_refresh_automation_now', array($this, 'handle_run_refresh_automation_now'));
         add_action('admin_post_kaco_scan_hierarchy_cleanup', array($this, 'handle_scan_hierarchy_cleanup'));
         add_action('admin_post_kaco_apply_hierarchy_cleanup', array($this, 'handle_apply_hierarchy_cleanup'));
+        add_action('admin_post_kaco_export_hierarchy_cleanup_csv', array($this, 'handle_export_hierarchy_cleanup_csv'));
         add_action('admin_post_kaco_rollback_hierarchy_cleanup', array($this, 'handle_rollback_hierarchy_cleanup'));
         add_action('admin_post_kaco_generate_category_ai', array($this, 'handle_generate_category_ai'));
         add_action('admin_post_kaco_apply_category_ai', array($this, 'handle_apply_category_ai'));

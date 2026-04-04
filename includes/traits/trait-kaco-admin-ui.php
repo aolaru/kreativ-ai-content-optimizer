@@ -156,11 +156,36 @@ trait KACO_Admin_UI_Trait {
     private function render_taxonomy_view() {
         echo '<h2>Taxonomy maintenance</h2>';
         echo '<p>Use this lane for archive health, not daily publishing. It groups hierarchy cleanup, category descriptions, and tag hygiene in one place.</p>';
+        $this->render_taxonomy_health_summary();
+        echo '<hr style="margin:24px 0;" />';
         $this->render_hierarchy_cleanup_view();
+        echo '<hr style="margin:24px 0;" />';
+        $this->render_duplicate_category_audit_view();
         echo '<hr style="margin:24px 0;" />';
         $this->render_categories_view();
         echo '<hr style="margin:24px 0;" />';
         $this->render_tags_view();
+    }
+
+    private function render_taxonomy_health_summary() {
+        $summary = $this->build_taxonomy_health_snapshot();
+        $cards = array(
+            'Hierarchy rows' => (int) ($summary['hierarchy_rows'] ?? 0),
+            'Category description gaps' => (int) ($summary['category_description_gaps'] ?? 0),
+            'Duplicate category groups' => (int) ($summary['duplicate_category_groups'] ?? 0),
+            'Duplicate tag groups' => (int) ($summary['duplicate_tag_groups'] ?? 0),
+            'Tag/category overlaps' => (int) ($summary['category_overlap_tags'] ?? 0),
+            'Over-tagged posts' => (int) ($summary['over_tagged_posts'] ?? 0),
+        );
+
+        echo '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">';
+        foreach ($cards as $label => $value) {
+            echo '<div style="background:#fff;border:1px solid #dcdcde;padding:14px;">';
+            echo '<div style="font-size:12px;color:#50575e;text-transform:uppercase;letter-spacing:0.04em;">' . esc_html($label) . '</div>';
+            echo '<div style="font-size:28px;font-weight:600;line-height:1.2;margin-top:6px;">' . (int) $value . '</div>';
+            echo '</div>';
+        }
+        echo '</div>';
     }
 
     private function render_audit_view() {
@@ -405,6 +430,17 @@ trait KACO_Admin_UI_Trait {
             echo '<p>';
             submit_button('Apply Selected Repairs', 'primary', '', false);
             echo '</p>';
+            echo '</form>';
+
+            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin:0 0 12px 0;">';
+            wp_nonce_field(self::NONCE_ACTION);
+            echo '<input type="hidden" name="action" value="kaco_export_hierarchy_cleanup_csv" />';
+            submit_button('Export Cleanup CSV', 'secondary', '', false);
+            echo '</form>';
+
+            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+            wp_nonce_field(self::NONCE_ACTION);
+            echo '<input type="hidden" name="action" value="kaco_apply_hierarchy_cleanup" />';
             echo '<table class="widefat striped">';
             echo '<thead><tr><th><input type="checkbox" onclick="jQuery(\'.kaco-cleanup-select\').prop(\'checked\', this.checked);" /></th><th>Post</th><th>Current</th><th>Proposed</th><th>Issues</th><th>Changes</th><th>Status</th></tr></thead><tbody>';
             foreach ($rows as $row) {
@@ -450,6 +486,38 @@ trait KACO_Admin_UI_Trait {
             }
             echo '</tbody></table>';
         }
+    }
+
+    private function render_duplicate_category_audit_view() {
+        $groups = $this->find_duplicate_like_categories();
+
+        echo '<h2>Duplicate category audit</h2>';
+        echo '<p>Preview duplicate-like child categories under the controlled font branches before deciding whether to merge them manually. This audit is read-only.</p>';
+
+        if (empty($groups)) {
+            echo '<p>No duplicate-like category groups were found under the controlled parent branches.</p>';
+            return;
+        }
+
+        echo '<table class="widefat striped">';
+        echo '<thead><tr><th>Branch</th><th>Parent</th><th>Keep</th><th>Merge Candidates</th><th>Reason</th></tr></thead><tbody>';
+        foreach ($groups as $group) {
+            $keep = $group['keep'] ?? null;
+            $merge = !empty($group['merge']) && is_array($group['merge']) ? $group['merge'] : array();
+            $merge_labels = array();
+            foreach ($merge as $term) {
+                $merge_labels[] = (string) $term->name . ' (' . (int) $term->count . ')';
+            }
+
+            echo '<tr>';
+            echo '<td>' . esc_html((string) ($group['branch_label'] ?? '')) . '</td>';
+            echo '<td>' . esc_html((string) ($group['parent_name'] ?? '')) . '</td>';
+            echo '<td>' . esc_html($keep ? ((string) $keep->name . ' (' . (int) $keep->count . ')') : '') . '</td>';
+            echo '<td>' . esc_html(implode(', ', $merge_labels)) . '</td>';
+            echo '<td>Normalized names collide under the same parent. Keep the strongest canonical term and review the rest for merge/reassignment.</td>';
+            echo '</tr>';
+        }
+        echo '</tbody></table>';
     }
 
     private function render_exceptions_view() {
