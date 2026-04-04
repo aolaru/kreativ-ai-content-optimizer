@@ -4,10 +4,9 @@ This build combines draft generation for new commercial font posts with the exis
 
 ## Included modules
 - `Generator`
-- `Audit & Queue`
-- `Suggestions`
-- `Categories`
-- `Tags`
+- `Refresh`
+- `Review`
+- `Taxonomy`
 - `Settings`
 
 ## Generator
@@ -20,9 +19,10 @@ This build combines draft generation for new commercial font posts with the exis
   - foundry
   - font style
   - tags
+  - page summary
   - post content
-- creates WordPress draft posts only after review
-- assigns the generated post into the `Fonts / Designer / Foundry / Font Style` category structure when those parent categories exist
+- creates WordPress draft or scheduled posts after review or automation
+- assigns the generated post into the `Fonts / Designer / Foundry / Font Style / Font Mood / Font Use Case` category structure when those parent categories exist
 - attempts to sideload the preview image and set it as featured image
 
 ## Editorial rewrite and optimization
@@ -34,28 +34,51 @@ This build combines draft generation for new commercial font posts with the exis
   - visual analysis
   - specific use cases
   - pairing notes
-  - verified details
-- improved content template for stronger font-review style rewrites
+  - verified facts
+- optimizer template now matches the generator's current HTML section structure
 
 ## Automation
 - scheduled audits for existing content using WordPress cron
-- automation settings for:
-  - frequency
-  - post type
-  - scan limit
-  - fonts-only scope
-  - issue filter
 - can auto-generate AI for newly queued suggestions
 - can auto-approve only high-confidence suggestions
 - can auto-apply only higher-confidence approved old-post suggestions
-- leaves lower-confidence items in the review queue as exceptions
-- can process a generator URL inbox in batches
-- can auto-create high-confidence drafts from inbox URLs
-- can auto-schedule generated posts at fixed spacing intervals
-- leaves weaker or failed generator previews in the generator review queue
+- can process an automation queue of new marketplace URLs in batches
+- can auto-create and auto-schedule high-confidence generated posts
 - stores per-item automation logs and exposes a unified exception inbox
+- diagnostics mode shows stage-specific failure data for generator and automation issues
 - does not auto-publish posts
 
-## Notes
-- The generator uses best-effort inference from the supplied URL, so every preview should be reviewed before creating drafts.
-- This merged build reuses the optimizer's OpenAI settings. The old descriptor plugin's separate API settings are no longer needed if you move to this version.
+## Direct deployment from GitHub
+This repo includes a GitHub Actions workflow that can replace the live plugin on your WordPress server after each push to `main`.
+
+### Required GitHub Actions secrets
+- `DEPLOY_HOST`: SSH host for the web server
+- `DEPLOY_USER`: SSH user
+- `DEPLOY_PORT`: SSH port, usually `22`
+- `DEPLOY_SSH_PRIVATE_KEY`: private key for the deploy user
+- `DEPLOY_PLUGIN_DIR`: full remote path to the live plugin directory
+
+Example `DEPLOY_PLUGIN_DIR`:
+- `/srv/htdocs/wp-content/plugins/kreativ-ai-content-optimizer`
+
+### How deploy works
+1. GitHub Actions checks out the repo
+2. ensures the live plugin directory exists on the server
+3. copies the new plugin contents over the existing live plugin directory
+4. removes files from the live plugin directory that no longer exist in the repo
+
+This deploys by syncing the plugin folder directly instead of installing from ZIP.
+
+### Local deploy helper
+You can also deploy directly from your machine:
+
+```bash
+DEPLOY_HOST=example.com \
+DEPLOY_USER=deploy \
+DEPLOY_PORT=22 \
+DEPLOY_PLUGIN_DIR=/srv/htdocs/wp-content/plugins/kreativ-ai-content-optimizer \
+bash scripts/deploy-plugin.sh
+```
+
+Optional:
+- `DEPLOY_SSH_KEY_PATH=/path/to/private/key`
