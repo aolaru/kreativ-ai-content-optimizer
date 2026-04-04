@@ -161,6 +161,21 @@ trait KACO_Content_Trait {
         $whats_included = isset($context['whats_included']) && is_array($context['whats_included']) ? $this->bullet_list_html($context['whats_included']) : '- Included items were not generated.';
         $pricing_details = isset($context['pricing_details']) && is_array($context['pricing_details']) ? $this->bullet_list_html($context['pricing_details']) : '- Pricing details were not generated.';
         $verified_details = isset($context['verified_details']) && is_array($context['verified_details']) ? $this->bullet_list_html($context['verified_details']) : '- Verified details were not generated.';
+        $font_details = '';
+        if (!empty($context['font_details']) && is_string($context['font_details'])) {
+            $font_details = trim((string) $context['font_details']);
+        } elseif (!empty($context['font_category_hierarchy']) && is_array($context['font_category_hierarchy'])) {
+            $hierarchy = (array) $context['font_category_hierarchy'];
+            $font_details = $this->build_generated_font_details_section(
+                (string) ($hierarchy['font_style_name'] ?? ''),
+                !empty($hierarchy['font_mood_names']) ? (array) $hierarchy['font_mood_names'] : array(),
+                !empty($hierarchy['font_use_case_names']) ? (array) $hierarchy['font_use_case_names'] : array(),
+                !empty($hierarchy['designer_names']) ? (array) $hierarchy['designer_names'] : array(),
+                (string) ($hierarchy['foundry_name'] ?? ''),
+                isset($context['verified_details']) && is_array($context['verified_details']) ? (array) $context['verified_details'] : array(),
+                isset($context['fact_evidence']) && is_array($context['fact_evidence']) ? (array) $context['fact_evidence'] : array()
+            );
+        }
 
         $map = array(
             '{{post_title}}' => $title,
@@ -174,6 +189,7 @@ trait KACO_Content_Trait {
             '{{whats_included}}' => $whats_included,
             '{{pricing_details}}' => $pricing_details,
             '{{verified_details}}' => $verified_details,
+            '{{font_details}}' => $font_details,
         );
 
         return $this->cleanup_rendered_template(strtr((string) $template, $map));
@@ -191,10 +207,10 @@ trait KACO_Content_Trait {
         foreach ((array) $items as $item) {
             $item = trim((string) $item);
             if ($item !== '') {
-                $lines[] = '- ' . $item;
+                $lines[] = '<li>' . esc_html($item) . '</li>';
             }
         }
-        return !empty($lines) ? implode("\n", $lines) : '-';
+        return !empty($lines) ? '<ul>' . implode('', $lines) . '</ul>' : '<ul><li>-</li></ul>';
     }
 
     private function suggest_related_links($post_id, $font_category_hierarchy = array()) {

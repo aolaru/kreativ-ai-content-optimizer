@@ -24,6 +24,7 @@ final class KACO_Plugin {
     public function __construct($plugin_file) {
         $this->plugin_file = $plugin_file;
         $this->migrate_default_openai_settings();
+        $this->migrate_update_template_default();
         register_activation_hook($this->plugin_file, array($this, 'activate'));
         register_deactivation_hook($this->plugin_file, array($this, 'deactivate'));
         add_action('admin_menu', array($this, 'register_admin_menu'));
@@ -89,7 +90,7 @@ final class KACO_Plugin {
         add_option('kaco_min_internal_links', '4');
         add_option('kaco_min_words', '250');
         add_option('kaco_category_desc_min_chars', '120');
-        add_option('kaco_update_template', "## Why you'll love {{post_title}}\n\n{{ai_intro}}\n\n## Visual character\n\n{{visual_analysis}}\n\n## Best for\n\n{{best_for}}\n\n## Pairing suggestions\n\n{{pairing_notes}}\n\n## Font Features\n\n{{font_features}}\n\n## What's Included\n\n{{whats_included}}\n\n## Pricing\n\n{{pricing_details}}\n\n## Verified details\n\n{{verified_details}}\n");
+        add_option('kaco_update_template', $this->default_update_template());
         add_option('kaco_openai_api_key', '');
         add_option('kaco_openai_endpoint', self::OPENAI_ENDPOINT);
         add_option('kaco_openai_model', self::OPENAI_MODEL);
@@ -136,6 +137,7 @@ final class KACO_Plugin {
 
         $this->ensure_automation_schedule();
         $this->migrate_default_openai_settings();
+        $this->migrate_update_template_default();
     }
 
     public function deactivate() {
@@ -219,6 +221,21 @@ final class KACO_Plugin {
 
     private function clear_automation_schedule() {
         wp_clear_scheduled_hook('kaco_automation_event');
+    }
+
+    private function legacy_update_template() {
+        return "## Why you'll love {{post_title}}\n\n{{ai_intro}}\n\n## Visual character\n\n{{visual_analysis}}\n\n## Best for\n\n{{best_for}}\n\n## Pairing suggestions\n\n{{pairing_notes}}\n\n## Font Features\n\n{{font_features}}\n\n## What's Included\n\n{{whats_included}}\n\n## Pricing\n\n{{pricing_details}}\n\n## Verified details\n\n{{verified_details}}\n";
+    }
+
+    private function default_update_template() {
+        return "<h2>Why you should consider {{post_title}}</h2>\n<p>{{ai_intro}}</p>\n\n<h2>Visual character</h2>\n<p>{{visual_analysis}}</p>\n\n<h2>Best use cases</h2>\n{{best_for}}\n\n<h2>Font pairing ideas</h2>\n{{pairing_notes}}\n\n<h2>Font Features</h2>\n{{font_features}}\n\n<h2>What's Included</h2>\n{{whats_included}}\n\n<h2>Pricing</h2>\n{{pricing_details}}\n\n{{font_details}}\n";
+    }
+
+    private function migrate_update_template_default() {
+        $current = (string) get_option('kaco_update_template', '');
+        if ($current === '' || $current === $this->legacy_update_template()) {
+            update_option('kaco_update_template', $this->default_update_template(), false);
+        }
     }
 
     private function migrate_default_openai_settings() {

@@ -1198,7 +1198,7 @@ trait KACO_Admin_UI_Trait {
         echo '<td><input type="number" min="20" max="2000" id="kaco_category_desc_min_chars" name="kaco_category_desc_min_chars" value="' . (int) $category_desc_min_chars . '" /></td></tr>';
 
         echo '<tr><th scope="row"><label for="kaco_update_template">Content update template</label></th>';
-        echo '<td><textarea id="kaco_update_template" name="kaco_update_template" rows="12" cols="80" class="large-text code">' . esc_textarea($template) . '</textarea></td></tr>';
+        echo '<td><textarea id="kaco_update_template" name="kaco_update_template" rows="12" cols="80" class="large-text code">' . esc_textarea($template) . '</textarea><p class="description">This should mirror the current new-font HTML structure. Use <code>{{font_details}}</code> instead of a separate verified-details block when you want the merged details section.</p></td></tr>';
 
         echo '<tr><th scope="row"><label for="kaco_openai_api_key">OpenAI API key</label></th>';
         echo '<td><input type="password" id="kaco_openai_api_key" name="kaco_openai_api_key" value="' . esc_attr($openai_key) . '" class="regular-text" autocomplete="off" /></td></tr>';

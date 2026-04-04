@@ -888,6 +888,8 @@ trait KACO_Actions_Trait {
             'whats_included' => !empty($ai['whats_included']) ? (array) $ai['whats_included'] : array(),
             'pricing_details' => !empty($ai['pricing_details']) ? (array) $ai['pricing_details'] : array(),
             'verified_details' => !empty($ai['verified_details']) ? (array) $ai['verified_details'] : array(),
+            'font_category_hierarchy' => !empty($ai['font_category_hierarchy']) ? (array) $ai['font_category_hierarchy'] : array(),
+            'fact_evidence' => !empty($ai['fact_evidence']) ? (array) $ai['fact_evidence'] : array(),
             'related_links' => !empty($ai['internal_links']) ? $ai['internal_links'] : ($suggestion['suggested_internal_links'] ?? array()),
         );
 
