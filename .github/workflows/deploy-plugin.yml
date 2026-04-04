@@ -6,31 +6,44 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: deploy-plugin-production
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+
     steps:
-      - name: Checkout
+      - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Start SSH agent
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-
-      - name: Add deploy host to known_hosts
+      - name: Validate deployment secrets
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          WP_SSH_HOST: ${{ secrets.WP_SSH_HOST }}
+          WP_SSH_PORT: ${{ secrets.WP_SSH_PORT }}
+          WP_SSH_USER: ${{ secrets.WP_SSH_USER }}
+          WP_SSH_PASSWORD: ${{ secrets.WP_SSH_PASSWORD }}
+          WP_REMOTE_PATH: ${{ secrets.WP_REMOTE_PATH }}
         run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -p "${DEPLOY_PORT:-22}" -H "${DEPLOY_HOST}" >> ~/.ssh/known_hosts
+          test -n "${WP_SSH_HOST}" || { echo "Missing WP_SSH_HOST"; exit 1; }
+          test -n "${WP_SSH_PORT}" || { echo "Missing WP_SSH_PORT"; exit 1; }
+          test -n "${WP_SSH_USER}" || { echo "Missing WP_SSH_USER"; exit 1; }
+          test -n "${WP_SSH_PASSWORD}" || { echo "Missing WP_SSH_PASSWORD"; exit 1; }
+          test -n "${WP_REMOTE_PATH}" || { echo "Missing WP_REMOTE_PATH"; exit 1; }
 
-      - name: Deploy plugin
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          DEPLOY_PLUGIN_DIR: ${{ secrets.DEPLOY_PLUGIN_DIR }}
-        run: bash scripts/deploy-plugin.sh
+      - name: Deploy plugin over SFTP
+        uses: Dylan700/sftp-upload-action@latest
+        with:
+          server: ${{ secrets.WP_SSH_HOST }}
+          port: ${{ secrets.WP_SSH_PORT }}
+          username: ${{ secrets.WP_SSH_USER }}
+          password: ${{ secrets.WP_SSH_PASSWORD }}
+          uploads: |
+            ./ => ${{ secrets.WP_REMOTE_PATH }}
+          ignore: |
+            .git
+            .github
+            .gitignore
+            README.md
+            *.zip

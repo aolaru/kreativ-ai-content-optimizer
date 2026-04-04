@@ -49,28 +49,27 @@ This build combines draft generation for new commercial font posts with the exis
 - does not auto-publish posts
 
 ## Direct deployment from GitHub
-This repo includes a GitHub Actions workflow that can replace the live plugin on your WordPress server after each push to `main`.
+This repo includes a GitHub Actions workflow that deploys the plugin to your WordPress server after each push to `main`, using the same `WP_*` secret pattern as your theme deployment.
 
 ### Required GitHub Actions secrets
-- `DEPLOY_HOST`: SSH host for the web server
-- `DEPLOY_USER`: SSH user
-- `DEPLOY_PORT`: SSH port, usually `22`
-- `DEPLOY_SSH_PRIVATE_KEY`: private key for the deploy user
-- `DEPLOY_PLUGIN_DIR`: full remote path to the live plugin directory
+- `WP_SSH_HOST`: SSH host for the web server
+- `WP_SSH_PORT`: SSH port, usually `22`
+- `WP_SSH_USER`: SSH user
+- `WP_SSH_PASSWORD`: SSH password
+- `WP_REMOTE_PATH`: full remote path to the live plugin directory
 
-Example `DEPLOY_PLUGIN_DIR`:
+Example `WP_REMOTE_PATH`:
 - `/srv/htdocs/wp-content/plugins/kreativ-ai-content-optimizer`
 
 ### How deploy works
 1. GitHub Actions checks out the repo
-2. ensures the live plugin directory exists on the server
-3. copies the new plugin contents over the existing live plugin directory
-4. removes files from the live plugin directory that no longer exist in the repo
+2. validates the required WordPress deployment secrets
+3. uploads the plugin repo contents over SFTP to the live plugin directory
 
-This deploys by syncing the plugin folder directly instead of installing from ZIP.
+This deploys the plugin folder directly instead of installing from ZIP.
 
 ### Local deploy helper
-You can also deploy directly from your machine:
+If you still want local deployment from your machine, the helper script remains available:
 
 ```bash
 DEPLOY_HOST=example.com \
