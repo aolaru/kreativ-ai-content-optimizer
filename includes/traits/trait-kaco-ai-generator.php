@@ -1,6 +1,66 @@
 <?php
 
 trait KACO_AI_Generator_Trait {
+    public function handle_retry_generator_review_item() {
+        $this->require_admin_request();
+        $queue_key = (int) ($_POST['queue_key'] ?? -1);
+        $items = $this->get_generator_automation_review();
+        if (!isset($items[$queue_key])) {
+            $this->redirect_with_notice('Generator review item not found.', 'review');
+        }
+
+        $url = esc_url_raw((string) ($items[$queue_key]['url'] ?? ''));
+        if ($url === '') {
+            $this->redirect_with_notice('Generator review item is missing a source URL.', 'review');
+        }
+
+        $preview = $this->request_generator_preview($url);
+        if (!$preview) {
+            $items[$queue_key]['automation_error'] = 'Preview generation failed again.';
+            $this->set_generator_automation_review($items);
+            $this->redirect_with_notice('Generator preview retry failed.', 'review');
+        }
+
+        $preview['preview_source'] = 'automation';
+        $items[$queue_key] = $preview;
+        $this->set_generator_automation_review($items);
+        $this->redirect_with_notice('Generator review item retried successfully.', 'review');
+    }
+
+    public function handle_discard_generator_review_item() {
+        $this->require_admin_request();
+        $queue_key = (int) ($_POST['queue_key'] ?? -1);
+        $items = $this->get_generator_automation_review();
+        if (!isset($items[$queue_key])) {
+            $this->redirect_with_notice('Generator review item not found.', 'review');
+        }
+
+        unset($items[$queue_key]);
+        $this->set_generator_automation_review(array_values($items));
+        $this->redirect_with_notice('Generator review item removed.', 'review');
+    }
+
+    public function handle_create_generator_review_item() {
+        $this->require_admin_request();
+        $queue_key = (int) ($_POST['queue_key'] ?? -1);
+        $items = $this->get_generator_automation_review();
+        if (!isset($items[$queue_key])) {
+            $this->redirect_with_notice('Generator review item not found.', 'review');
+        }
+
+        $post_id = $this->create_generated_draft_from_preview($items[$queue_key]);
+        if (is_wp_error($post_id) || (int) $post_id <= 0) {
+            $items[$queue_key]['automation_error'] = is_wp_error($post_id) ? $post_id->get_error_message() : 'Draft creation failed.';
+            $this->set_generator_automation_review($items);
+            $message = is_wp_error($post_id) ? $post_id->get_error_message() : 'Draft creation failed.';
+            $this->redirect_with_notice('Generator review item could not be created: ' . $message, 'review');
+        }
+
+        unset($items[$queue_key]);
+        $this->set_generator_automation_review(array_values($items));
+        $this->redirect_with_notice('Generator review item created successfully.', 'review');
+    }
+
     public function handle_add_generator_urls_to_inbox() {
         $this->require_admin_request();
 

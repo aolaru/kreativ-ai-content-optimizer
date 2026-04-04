@@ -113,13 +113,41 @@ trait KACO_Admin_UI_Trait {
                 echo ' | Failed: ' . (int) ($automation_last_run['automation']['failed'] ?? 0);
             }
             echo '</p>';
-            echo '<p><a href="' . esc_url(admin_url('admin.php?page=kaco-dashboard&view=review')) . '">Open Review</a></p>';
         }
+        echo '<p><a href="' . esc_url(admin_url('admin.php?page=kaco-dashboard&view=review')) . '">Open Review</a></p>';
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin-top:12px;">';
+        wp_nonce_field(self::NONCE_ACTION);
+        echo '<input type="hidden" name="action" value="kaco_run_refresh_automation_now" />';
+        submit_button('Run Refresh Automation Now', 'secondary', 'submit', false);
+        echo '</form>';
+        echo '<p class="description">Use this when you want the refresh lane processed immediately instead of waiting for WP-Cron.</p>';
     }
 
     private function render_review_view() {
+        global $wpdb;
+        $table = $this->table_name();
+        $review_filter = isset($_GET['review_filter']) ? sanitize_key((string) $_GET['review_filter']) : 'all';
+        $needs_review_count = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table} WHERE status = 'needs_review'");
+        $approved_count = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table} WHERE status = 'approved'");
+        $generator_count = count($this->get_generator_automation_review());
+        $failed_logs_count = count(array_filter((array) $this->get_automation_logs(), function($item) {
+            return (string) ($item['status'] ?? '') === 'failed';
+        }));
+
         echo '<h2>Review center</h2>';
         echo '<p>This lane combines manual review work: low-confidence exceptions, automation failures, and the main suggestions queue.</p>';
+        echo '<p>';
+        foreach (array(
+            'all' => 'All',
+            'needs_review' => 'Needs Review (' . $needs_review_count . ')',
+            'approved' => 'Ready To Apply (' . $approved_count . ')',
+            'generator' => 'Generator (' . $generator_count . ')',
+            'failed' => 'Failures (' . $failed_logs_count . ')',
+        ) as $key => $label) {
+            $url = admin_url('admin.php?page=kaco-dashboard&view=review&review_filter=' . $key);
+            echo '<a href="' . esc_url($url) . '" style="margin-right:10px;">' . esc_html($label) . '</a>';
+        }
+        echo '</p>';
         $this->render_exceptions_view();
         echo '<hr style="margin:24px 0;" />';
         $this->render_suggestions_view();
@@ -159,7 +187,7 @@ trait KACO_Admin_UI_Trait {
             if (!empty($last_summary['top_rows']) && is_array($last_summary['top_rows'])) {
                 echo '<p><strong>Top matches:</strong></p><ul>';
                 foreach ($last_summary['top_rows'] as $row) {
-                    echo '<li>' . esc_html((string) ($row['title'] ?? ('Post #' . (int) ($row['post_id'] ?? 0)))) . ' | priority ' . (int) ($row['priority_score'] ?? 0) . ' | ' . esc_html(implode(', ', (array) ($row['reason_badges'] ?? array()))) . ' | ' . esc_html((string) ($row['current_hierarchy_preview'] ?? '')) . '</li>';
+                    echo '<li>' . esc_html((string) ($row['title'] ?? ('Post #' . (int) ($row['post_id'] ?? 0)))) . ' | priority ' . (int) ($row['priority_score'] ?? 0) . ' | action: ' . esc_html((string) ($row['suggested_action'] ?? 'Manual review')) . ' | ' . esc_html(implode(', ', (array) ($row['reason_badges'] ?? array()))) . ' | ' . esc_html((string) ($row['current_hierarchy_preview'] ?? '')) . '</li>';
                 }
                 echo '</ul>';
             }
@@ -171,6 +199,18 @@ trait KACO_Admin_UI_Trait {
         echo '<input type="hidden" name="action" value="kaco_run_audit" />';
 
         echo '<table class="form-table" role="presentation"><tbody>';
+        echo '<tr><th scope="row"><label for="kaco_audit_preset">Audit preset</label></th>';
+        echo '<td><select id="kaco_audit_preset" name="kaco_audit_preset">';
+        foreach (array(
+            'custom' => 'Custom',
+            'missing_hierarchy' => 'Missing hierarchy',
+            'thin' => 'Thin content',
+            'stale' => 'Stale content',
+            'high_priority' => 'High priority only',
+        ) as $value => $label) {
+            echo '<option value="' . esc_attr($value) . '">' . esc_html($label) . '</option>';
+        }
+        echo '</select> <p class="description">Use a preset for fast audits, or keep Custom to use the form values directly.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_post_type">Post type</label></th>';
         echo '<td><input type="text" id="kaco_post_type" name="kaco_post_type" value="post" class="regular-text" /></td></tr>';
 
@@ -414,6 +454,7 @@ trait KACO_Admin_UI_Trait {
 
     private function render_exceptions_view() {
         global $wpdb;
+        $review_filter = isset($_GET['review_filter']) ? sanitize_key((string) $_GET['review_filter']) : 'all';
 
         $needs_review_rows = $wpdb->get_results('SELECT * FROM ' . $this->table_name() . " WHERE status = 'needs_review' ORDER BY updated_at DESC LIMIT 100", ARRAY_A);
         $generator_review = $this->get_generator_automation_review();
@@ -425,7 +466,8 @@ trait KACO_Admin_UI_Trait {
         echo '<h2>Exception inbox</h2>';
         echo '<p>This is the manual review surface for automation fallout: low-confidence old-post suggestions, generator previews that were not auto-created, and automation failures that need retry or cleanup.</p>';
 
-        echo '<h3>Old-post suggestions needing review</h3>';
+        if ($review_filter === 'all' || $review_filter === 'needs_review') {
+            echo '<h3>Old-post suggestions needing review</h3>';
         if (empty($needs_review_rows)) {
             echo '<p>No old-post suggestions are waiting in <code>needs_review</code>.</p>';
         } else {
@@ -445,24 +487,33 @@ trait KACO_Admin_UI_Trait {
             }
             echo '</tbody></table>';
         }
+        }
 
-        echo '<h3>Generator review queue</h3>';
+        if ($review_filter === 'all' || $review_filter === 'generator') {
+            echo '<h3>Generator review queue</h3>';
         if (empty($generator_review)) {
             echo '<p>No generator previews are waiting for review.</p>';
         } else {
-            echo '<table class="widefat striped"><thead><tr><th>URL</th><th>Title</th><th>Confidence</th><th>Note</th></tr></thead><tbody>';
-            foreach ($generator_review as $item) {
+            echo '<table class="widefat striped"><thead><tr><th>URL</th><th>Title</th><th>Confidence</th><th>Note</th><th>Actions</th></tr></thead><tbody>';
+            foreach ($generator_review as $queue_key => $item) {
                 echo '<tr>';
                 echo '<td>' . esc_html((string) ($item['url'] ?? '')) . '</td>';
                 echo '<td>' . esc_html((string) ($item['title'] ?? '')) . '</td>';
                 echo '<td>' . esc_html(isset($item['confidence']) ? number_format((float) $item['confidence'], 2) : '0.00') . '</td>';
                 echo '<td>' . esc_html((string) ($item['automation_error'] ?? 'Manual review required.')) . '</td>';
+                echo '<td>';
+                $this->render_generator_review_action_form('kaco_create_generator_review_item', 'Create Now', (int) $queue_key);
+                $this->render_generator_review_action_form('kaco_retry_generator_review_item', 'Retry', (int) $queue_key);
+                $this->render_generator_review_action_form('kaco_discard_generator_review_item', 'Discard', (int) $queue_key);
+                echo '</td>';
                 echo '</tr>';
             }
             echo '</tbody></table>';
         }
+        }
 
-        echo '<h3>Automation failure log</h3>';
+        if ($review_filter === 'all' || $review_filter === 'failed') {
+            echo '<h3>Automation failure log</h3>';
         if (empty($logs)) {
             echo '<p>No recent automation failures or review escalations.</p>';
         } else {
@@ -492,6 +543,7 @@ trait KACO_Admin_UI_Trait {
                 echo '</tr>';
             }
             echo '</tbody></table>';
+        }
         }
     }
 
@@ -884,6 +936,15 @@ trait KACO_Admin_UI_Trait {
         wp_nonce_field(self::NONCE_ACTION);
         echo '<input type="hidden" name="action" value="' . esc_attr($action) . '" />';
         echo '<input type="hidden" name="suggestion_id" value="' . (int) $suggestion_id . '" />';
+        submit_button($label, 'secondary small', '', false);
+        echo '</form>';
+    }
+
+    private function render_generator_review_action_form($action, $label, $queue_key) {
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="display:inline-block;margin-right:6px;">';
+        wp_nonce_field(self::NONCE_ACTION);
+        echo '<input type="hidden" name="action" value="' . esc_attr($action) . '" />';
+        echo '<input type="hidden" name="queue_key" value="' . (int) $queue_key . '" />';
         submit_button($label, 'secondary small', '', false);
         echo '</form>';
     }

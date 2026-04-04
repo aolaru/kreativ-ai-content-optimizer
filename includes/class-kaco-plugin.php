@@ -32,7 +32,11 @@ final class KACO_Plugin {
         add_action('admin_post_kaco_process_generator_queue_now', array($this, 'handle_process_generator_queue_now'));
         add_action('admin_post_kaco_generate_font_previews', array($this, 'handle_generate_font_previews'));
         add_action('admin_post_kaco_create_generated_drafts', array($this, 'handle_create_generated_drafts'));
+        add_action('admin_post_kaco_retry_generator_review_item', array($this, 'handle_retry_generator_review_item'));
+        add_action('admin_post_kaco_discard_generator_review_item', array($this, 'handle_discard_generator_review_item'));
+        add_action('admin_post_kaco_create_generator_review_item', array($this, 'handle_create_generator_review_item'));
         add_action('admin_post_kaco_run_audit', array($this, 'handle_run_audit'));
+        add_action('admin_post_kaco_run_refresh_automation_now', array($this, 'handle_run_refresh_automation_now'));
         add_action('admin_post_kaco_scan_hierarchy_cleanup', array($this, 'handle_scan_hierarchy_cleanup'));
         add_action('admin_post_kaco_apply_hierarchy_cleanup', array($this, 'handle_apply_hierarchy_cleanup'));
         add_action('admin_post_kaco_rollback_hierarchy_cleanup', array($this, 'handle_rollback_hierarchy_cleanup'));

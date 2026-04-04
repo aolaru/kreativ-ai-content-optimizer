@@ -1,6 +1,28 @@
 <?php
 
 trait KACO_Actions_Trait {
+    public function handle_run_refresh_automation_now() {
+        $this->require_admin_request();
+
+        if (get_option('kaco_automation_enabled', '0') !== '1') {
+            $this->redirect_with_notice('Refresh automation is disabled in settings.', 'refresh');
+        }
+
+        $this->handle_automation_event();
+        $summary = get_option('kaco_automation_last_run', array());
+        $message = 'Refresh automation processed: '
+            . (int) ($summary['scanned'] ?? 0) . ' scanned, '
+            . (int) ($summary['matched'] ?? 0) . ' matched, '
+            . (int) ($summary['queued'] ?? 0) . ' queued';
+        if (!empty($summary['automation']) && is_array($summary['automation'])) {
+            $message .= ', ' . (int) ($summary['automation']['generated'] ?? 0) . ' AI generated'
+                . ', ' . (int) ($summary['automation']['approved'] ?? 0) . ' auto-approved'
+                . ', ' . (int) ($summary['automation']['applied'] ?? 0) . ' auto-applied';
+        }
+        $message .= '.';
+        $this->redirect_with_notice($message, 'refresh');
+    }
+
     public function handle_process_generator_queue_now() {
         $this->require_admin_request();
 
@@ -161,14 +183,26 @@ trait KACO_Actions_Trait {
     public function handle_run_audit() {
         $this->require_admin_request();
 
+        $preset = sanitize_key((string) ($_POST['kaco_audit_preset'] ?? 'custom'));
+        $issue_filter = sanitize_key((string) ($_POST['kaco_issue_filter'] ?? 'all'));
+        $only_missing = !empty($_POST['kaco_only_missing']);
+        if ($preset !== '' && $preset !== 'custom') {
+            $audit_args = $this->apply_audit_preset(array(
+                'issue_filter' => $issue_filter,
+                'only_missing' => $only_missing,
+            ), $preset);
+            $issue_filter = sanitize_key((string) ($audit_args['issue_filter'] ?? $issue_filter));
+            $only_missing = !empty($audit_args['only_missing']);
+        }
+
         $summary = $this->run_audit_job(array(
             'post_type' => sanitize_key($_POST['kaco_post_type'] ?? 'post'),
             'limit' => min(500, max(1, (int) ($_POST['kaco_limit'] ?? 100))),
-            'only_missing' => !empty($_POST['kaco_only_missing']),
+            'only_missing' => $only_missing,
             'scan_all' => !empty($_POST['kaco_scan_all']),
             'fonts_only' => !empty($_POST['kaco_fonts_only']),
             'dry_run' => !empty($_POST['kaco_dry_run']),
-            'issue_filter' => sanitize_key((string) ($_POST['kaco_issue_filter'] ?? 'all')),
+            'issue_filter' => $issue_filter,
         ));
         update_option('kaco_last_audit_summary', $summary, false);
 
@@ -280,6 +314,7 @@ trait KACO_Actions_Trait {
                 'priority_score' => (int) ($audit['priority_score'] ?? 0),
                 'reason_badges' => (array) ($audit['reason_badges'] ?? array()),
                 'current_hierarchy_preview' => (string) ($audit['current_hierarchy_preview'] ?? ''),
+                'suggested_action' => $this->recommend_audit_action($audit),
             );
 
             if ($this->has_active_suggestion((int) $post_id)) {
@@ -349,6 +384,50 @@ trait KACO_Actions_Trait {
             default:
                 return true;
         }
+    }
+
+    private function apply_audit_preset($args, $preset) {
+        switch ($preset) {
+            case 'missing_hierarchy':
+                $args['issue_filter'] = 'missing_hierarchy';
+                $args['only_missing'] = true;
+                break;
+            case 'thin':
+                $args['issue_filter'] = 'thin';
+                $args['only_missing'] = false;
+                break;
+            case 'stale':
+                $args['issue_filter'] = 'stale';
+                $args['only_missing'] = false;
+                break;
+            case 'high_priority':
+                $args['issue_filter'] = 'all';
+                $args['only_missing'] = false;
+                break;
+        }
+        return $args;
+    }
+
+    private function recommend_audit_action($audit) {
+        $missing = !empty($audit['font_hierarchy_missing']);
+        $thin = !empty($audit['thin_content']);
+        $stale = !empty($audit['stale']);
+        $low_links = (int) ($audit['internal_links'] ?? 0) < (int) get_option('kaco_min_internal_links', 4);
+        $duplicates = !empty($audit['duplicate_candidates']);
+
+        if ($missing && !$thin && !$stale && !$low_links) {
+            return 'Fix hierarchy only';
+        }
+        if (($thin || $stale) && !$missing && !$duplicates) {
+            return 'Rewrite content';
+        }
+        if ($low_links && !$missing && !$thin && !$stale) {
+            return 'Relink only';
+        }
+        if ($missing || $thin || $stale || $duplicates) {
+            return 'Rewrite + taxonomy review';
+        }
+        return 'Manual review';
     }
 
     public function handle_generate_ai_batch() {
