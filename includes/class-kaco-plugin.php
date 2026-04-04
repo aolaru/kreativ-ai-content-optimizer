@@ -94,6 +94,7 @@ final class KACO_Plugin {
         add_option('kaco_openai_api_key', '');
         add_option('kaco_openai_endpoint', self::OPENAI_ENDPOINT);
         add_option('kaco_openai_model', self::OPENAI_MODEL);
+        add_option('kaco_debug_mode', '0');
         add_option('kaco_term_suggestions', array());
         add_option('kaco_fonts_category_name', 'Fonts');
         add_option('kaco_designer_parent_category_name', 'Designer');

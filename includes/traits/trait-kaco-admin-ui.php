@@ -369,6 +369,9 @@ trait KACO_Admin_UI_Trait {
             if (!empty($item['automation_error'])) {
                 echo '<p><strong>Automation note:</strong> ' . esc_html((string) $item['automation_error']) . '</p>';
             }
+            if (!empty($item['diagnostics']) && (get_option('kaco_debug_mode', '0') === '1' || !empty($item['automation_error']))) {
+                echo '<details style="margin:8px 0;"><summary><strong>Diagnostics</strong></summary><pre style="white-space:pre-wrap;word-break:break-word;">' . esc_html($this->format_debug_data($item['diagnostics'])) . '</pre></details>';
+            }
             if (empty($item['designer_names'])) {
                 echo '<p><strong>Designer status:</strong> no explicit source match found. Review before creating the draft.</p>';
             }
@@ -570,6 +573,9 @@ trait KACO_Admin_UI_Trait {
                 echo '<td>' . esc_html(isset($item['confidence']) ? number_format((float) $item['confidence'], 2) : '0.00') . '</td>';
                 echo '<td>' . esc_html((string) ($item['automation_error'] ?? 'Manual review required.')) . '</td>';
                 echo '<td>';
+                if (!empty($item['diagnostics']) && get_option('kaco_debug_mode', '0') === '1') {
+                    echo '<details style="margin:0 0 8px 0;"><summary>Diagnostics</summary><pre style="white-space:pre-wrap;word-break:break-word;">' . esc_html($this->format_debug_data($item['diagnostics'])) . '</pre></details>';
+                }
                 $this->render_generator_review_action_form('kaco_create_generator_review_item', 'Create Now', (int) $queue_key);
                 $this->render_generator_review_action_form('kaco_retry_generator_review_item', 'Retry', (int) $queue_key);
                 $this->render_generator_review_action_form('kaco_discard_generator_review_item', 'Discard', (int) $queue_key);
@@ -585,7 +591,7 @@ trait KACO_Admin_UI_Trait {
         if (empty($logs)) {
             echo '<p>No recent automation failures or review escalations.</p>';
         } else {
-            echo '<table class="widefat striped"><thead><tr><th>When</th><th>Lane</th><th>Action</th><th>Status</th><th>Item</th><th>Confidence</th><th>Message</th></tr></thead><tbody>';
+            echo '<table class="widefat striped"><thead><tr><th>When</th><th>Lane</th><th>Action</th><th>Status</th><th>Item</th><th>Confidence</th><th>Message</th><th>Diagnostics</th></tr></thead><tbody>';
             foreach (array_slice($logs, 0, 100) as $log) {
                 $item = array();
                 if (!empty($log['suggestion_id'])) {
@@ -608,6 +614,13 @@ trait KACO_Admin_UI_Trait {
                 echo '<td>' . esc_html(implode(' | ', $item)) . '</td>';
                 echo '<td>' . esc_html(isset($log['confidence']) && $log['confidence'] !== null ? number_format((float) $log['confidence'], 2) : '-') . '</td>';
                 echo '<td>' . esc_html((string) ($log['message'] ?? '')) . '</td>';
+                echo '<td>';
+                if (!empty($log['debug']) && get_option('kaco_debug_mode', '0') === '1') {
+                    echo '<details><summary>View</summary><pre style="white-space:pre-wrap;word-break:break-word;">' . esc_html($this->format_debug_data($log['debug'])) . '</pre></details>';
+                } else {
+                    echo '-';
+                }
+                echo '</td>';
                 echo '</tr>';
             }
             echo '</tbody></table>';
@@ -1134,6 +1147,17 @@ trait KACO_Admin_UI_Trait {
         return implode(' | ', $parts);
     }
 
+    private function format_debug_data($data) {
+        if (empty($data)) {
+            return '';
+        }
+        if (is_string($data)) {
+            return $data;
+        }
+        $json = wp_json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        return is_string($json) ? $json : print_r($data, true);
+    }
+
     private function render_settings_view() {
         $stale_months = (int) get_option('kaco_stale_months', 18);
         $min_internal_links = (int) get_option('kaco_min_internal_links', 4);
@@ -1143,6 +1167,7 @@ trait KACO_Admin_UI_Trait {
         $openai_key = (string) get_option('kaco_openai_api_key', '');
         $openai_endpoint = (string) get_option('kaco_openai_endpoint', self::OPENAI_ENDPOINT);
         $openai_model = (string) get_option('kaco_openai_model', self::OPENAI_MODEL);
+        $debug_mode = (string) get_option('kaco_debug_mode', '0');
         $fonts_category_name = (string) get_option('kaco_fonts_category_name', 'Fonts');
         $designer_parent_category_name = (string) get_option('kaco_designer_parent_category_name', 'Designer');
         $foundry_parent_category_name = (string) get_option('kaco_foundry_parent_category_name', 'Foundry');
@@ -1208,6 +1233,9 @@ trait KACO_Admin_UI_Trait {
 
         echo '<tr><th scope="row"><label for="kaco_openai_model">OpenAI model</label></th>';
         echo '<td><input type="text" id="kaco_openai_model" name="kaco_openai_model" value="' . esc_attr($openai_model) . '" class="regular-text" /></td></tr>';
+
+        echo '<tr><th scope="row"><label for="kaco_debug_mode">Diagnostics mode</label></th>';
+        echo '<td><label><input type="checkbox" id="kaco_debug_mode" name="kaco_debug_mode" value="1" ' . checked('1', $debug_mode, false) . ' /> yes</label> <p class="description">Show detailed failure diagnostics for source fetch, parser, OpenAI, and write stages in Review and Create.</p></td></tr>';
 
         echo '<tr><th scope="row"><label for="kaco_fonts_category_name">Fonts category name</label></th>';
         echo '<td><input type="text" id="kaco_fonts_category_name" name="kaco_fonts_category_name" value="' . esc_attr($fonts_category_name) . '" class="regular-text" /></td></tr>';
@@ -1346,6 +1374,7 @@ trait KACO_Admin_UI_Trait {
         update_option('kaco_openai_api_key', sanitize_text_field(wp_unslash($_POST['kaco_openai_api_key'] ?? '')));
         update_option('kaco_openai_endpoint', esc_url_raw(wp_unslash($_POST['kaco_openai_endpoint'] ?? self::OPENAI_ENDPOINT)));
         update_option('kaco_openai_model', sanitize_text_field(wp_unslash($_POST['kaco_openai_model'] ?? self::OPENAI_MODEL)));
+        update_option('kaco_debug_mode', !empty($_POST['kaco_debug_mode']) ? '1' : '0');
         update_option('kaco_fonts_category_name', sanitize_text_field(wp_unslash($_POST['kaco_fonts_category_name'] ?? 'Fonts')));
         update_option('kaco_designer_parent_category_name', sanitize_text_field(wp_unslash($_POST['kaco_designer_parent_category_name'] ?? 'Designer')));
         update_option('kaco_foundry_parent_category_name', sanitize_text_field(wp_unslash($_POST['kaco_foundry_parent_category_name'] ?? 'Foundry')));

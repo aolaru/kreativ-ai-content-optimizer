@@ -1,6 +1,24 @@
 <?php
 
 trait KACO_AI_Generator_Trait {
+    private function diagnostics_enabled() {
+        return get_option('kaco_debug_mode', '0') === '1';
+    }
+
+    private function build_error_result($code, $message, $debug = array()) {
+        return new WP_Error((string) $code, (string) $message, array('debug' => is_array($debug) ? $debug : array()));
+    }
+
+    private function extract_error_debug($error) {
+        if ($error instanceof WP_Error) {
+            $data = $error->get_error_data();
+            if (is_array($data)) {
+                return $data['debug'] ?? $data;
+            }
+        }
+        return array();
+    }
+
     public function handle_retry_generator_review_item() {
         $this->require_admin_request();
         $queue_key = (int) ($_POST['queue_key'] ?? -1);
@@ -15,10 +33,11 @@ trait KACO_AI_Generator_Trait {
         }
 
         $preview = $this->request_generator_preview($url);
-        if (!$preview) {
-            $items[$queue_key]['automation_error'] = 'Preview generation failed again.';
+        if (is_wp_error($preview)) {
+            $items[$queue_key]['automation_error'] = $preview->get_error_message();
+            $items[$queue_key]['diagnostics'] = $this->extract_error_debug($preview);
             $this->set_generator_automation_review($items);
-            $this->redirect_with_notice('Generator preview retry failed.', 'review');
+            $this->redirect_with_notice('Generator preview retry failed: ' . $preview->get_error_message(), 'review');
         }
 
         $preview['preview_source'] = 'automation';
@@ -98,8 +117,14 @@ trait KACO_AI_Generator_Trait {
         }
 
         $ai = $this->request_ai_suggestion($post, is_array($audit) ? $audit : array());
+        if (is_wp_error($ai)) {
+            return $ai;
+        }
         if (!$ai) {
-            return false;
+            return $this->build_error_result('optimizer_ai_failed', 'AI generation returned no usable payload.', array(
+                'stage' => 'optimizer_ai',
+                'post_id' => $post_id,
+            ));
         }
 
         $suggestion['ai'] = $ai;
@@ -213,8 +238,14 @@ trait KACO_AI_Generator_Trait {
         ));
 
         $decoded = $this->request_openai_json_payload($api_key, $endpoint, $model, $system_prompt, $user_prompt);
+        if (is_wp_error($decoded)) {
+            return $decoded;
+        }
         if (!is_array($decoded)) {
-            return false;
+            return $this->build_error_result('optimizer_ai_invalid_payload', 'AI generation did not return the expected payload.', array(
+                'stage' => 'optimizer_ai',
+                'post_id' => (int) $post->ID,
+            ));
         }
         return $this->sanitize_ai_payload($decoded);
     }
@@ -231,7 +262,7 @@ trait KACO_AI_Generator_Trait {
         $previews = array();
         foreach ($urls as $url) {
             $preview = $this->request_generator_preview($url);
-            if (!$preview) {
+            if (is_wp_error($preview)) {
                 $previews[] = array(
                     'url' => esc_url_raw($url),
                     'title' => '',
@@ -243,6 +274,8 @@ trait KACO_AI_Generator_Trait {
                     'font_use_case_names' => array(),
                     'tags' => array(),
                     'content' => '<p>Generation failed for this URL. Check the OpenAI settings or edit this draft manually.</p>',
+                    'automation_error' => $preview->get_error_message(),
+                    'diagnostics' => $this->extract_error_debug($preview),
                 );
                 continue;
             }
@@ -345,11 +378,21 @@ trait KACO_AI_Generator_Trait {
 
         $url = esc_url_raw((string) $url);
         if ($api_key === '' || $endpoint === '' || $model === '' || $url === '') {
-            return false;
+            return $this->build_error_result('missing_generator_config', 'OpenAI configuration or source URL is missing.', array(
+                'stage' => 'config',
+                'url' => $url,
+                'has_api_key' => $api_key !== '',
+                'endpoint' => $endpoint,
+                'model' => $model,
+            ));
         }
 
         $targets = $this->font_category_parent_targets();
-        $source_context = $this->fetch_source_context($url);
+        $source_result = $this->fetch_source_context($url);
+        if (is_wp_error($source_result)) {
+            return $source_result;
+        }
+        $source_context = is_array($source_result) ? $source_result : array();
         $font_name_hint = $this->infer_font_name_from_source_url($url, $source_context);
         $foundry_hint = $this->infer_foundry_name_from_source_url($url, $source_context);
         $source_entity_hints = $this->extract_source_entity_hints($url, $source_context, $font_name_hint, $foundry_hint);
@@ -427,14 +470,14 @@ trait KACO_AI_Generator_Trait {
         ));
 
         $decoded = $this->request_openai_json_payload($api_key, $endpoint, $model, $system_prompt, $user_prompt);
-        if (!is_array($decoded)) {
-            return false;
+        if (is_wp_error($decoded)) {
+            return $decoded;
         }
 
-        return $this->sanitize_generator_preview($decoded, $url);
+        return $this->sanitize_generator_preview($decoded, $url, $source_context);
     }
 
-    private function sanitize_generator_preview($payload, $url) {
+    private function sanitize_generator_preview($payload, $url, $source_context = array()) {
         $tags = array();
         if (!empty($payload['tags']) && is_array($payload['tags'])) {
             foreach ($payload['tags'] as $tag) {
@@ -470,7 +513,13 @@ trait KACO_AI_Generator_Trait {
         $whats_included = $this->sanitize_simple_bullets($payload['whats_included'] ?? array(), 8);
         $pricing_details = $this->sanitize_simple_bullets($payload['pricing_details'] ?? array(), 5);
 
-        $source_context = $this->fetch_source_context($url);
+        if (empty($source_context)) {
+            $source_result = $this->fetch_source_context($url);
+            if (is_wp_error($source_result)) {
+                return $source_result;
+            }
+            $source_context = is_array($source_result) ? $source_result : array();
+        }
         $font_name_hint = $this->infer_font_name_from_source_url($url, $source_context);
         $foundry_hint = $this->infer_foundry_name_from_source_url($url, $source_context);
         $source_entity_hints = $this->extract_source_entity_hints($url, $source_context, $font_name_hint, $foundry_hint);
@@ -545,7 +594,7 @@ trait KACO_AI_Generator_Trait {
             ));
         }
 
-        return array(
+        $result = array(
             'url' => esc_url_raw($url),
             'title' => $title,
             'image_url' => esc_url_raw((string) ($payload['image_url'] ?? ($source_context['image_url'] ?? ''))),
@@ -594,6 +643,27 @@ trait KACO_AI_Generator_Trait {
                 'fact_evidence' => $fact_evidence,
             )),
         );
+        if ($this->diagnostics_enabled()) {
+            $result['diagnostics'] = array(
+                'stage' => 'preview_ready',
+                'source_summary' => array(
+                    'title' => (string) ($source_context['title'] ?? ''),
+                    'has_description' => !empty($source_context['description']),
+                    'has_text_excerpt' => !empty($source_context['text_excerpt']),
+                    'has_image_url' => !empty($source_context['image_url']),
+                ),
+                'entity_hints' => array(
+                    'font_name_hint' => $font_name_hint,
+                    'foundry_hint' => $foundry_hint,
+                    'source_designer_names' => (array) ($source_entity_hints['designer_names'] ?? array()),
+                ),
+                'fact_counts' => array(
+                    'verified_details' => count((array) $verified_details),
+                    'fact_evidence' => count((array) $fact_evidence),
+                ),
+            );
+        }
+        return $result;
     }
 
     private function resolve_designer_names($ai_designer_names, $source_entity_hints, $evidence) {
@@ -1270,7 +1340,10 @@ trait KACO_AI_Generator_Trait {
     private function fetch_source_context($url) {
         $url = esc_url_raw((string) $url);
         if ($url === '') {
-            return array();
+            return $this->build_error_result('invalid_source_url', 'Source URL is empty or invalid.', array(
+                'stage' => 'source_fetch',
+                'url' => $url,
+            ));
         }
 
         $response = wp_remote_get($url, array(
@@ -1281,13 +1354,21 @@ trait KACO_AI_Generator_Trait {
             ),
         ));
         if (is_wp_error($response)) {
-            return array();
+            return $this->build_error_result('source_fetch_failed', 'Source fetch failed: ' . $response->get_error_message(), array(
+                'stage' => 'source_fetch',
+                'url' => $url,
+            ));
         }
 
         $code = (int) wp_remote_retrieve_response_code($response);
         $html = (string) wp_remote_retrieve_body($response);
         if ($code < 200 || $code >= 300 || $html === '') {
-            return array();
+            return $this->build_error_result('source_fetch_http_error', 'Source fetch returned HTTP ' . $code . '.', array(
+                'stage' => 'source_fetch',
+                'url' => $url,
+                'http_code' => $code,
+                'body_length' => strlen($html),
+            ));
         }
 
         $og_image = $this->extract_meta_content($html, array('og:image', 'twitter:image'));
@@ -1696,13 +1777,16 @@ trait KACO_AI_Generator_Trait {
             }
 
             $preview = $this->request_generator_preview($url);
-            if (!$preview) {
+            if (is_wp_error($preview)) {
+                $error_message = $preview->get_error_message();
+                $debug = $this->extract_error_debug($preview);
                 $this->append_automation_log(array(
                     'lane' => 'generator',
                     'action' => 'generate_preview',
                     'status' => 'failed',
                     'url' => $url,
-                    'message' => 'Preview generation failed.',
+                    'message' => $error_message,
+                    'debug' => $debug,
                 ));
                 $review_items[] = array(
                     'preview_source' => 'automation',
@@ -1717,7 +1801,8 @@ trait KACO_AI_Generator_Trait {
                     'tags' => array(),
                     'content' => '<p>Generation failed for this URL. Review the source manually.</p>',
                     'confidence' => 0,
-                    'automation_error' => 'Preview generation failed.',
+                    'automation_error' => $error_message,
+                    'diagnostics' => $debug,
                 );
                 $queued_for_review++;
                 $failed++;
@@ -1753,6 +1838,7 @@ trait KACO_AI_Generator_Trait {
                     'title' => (string) ($preview['title'] ?? ''),
                     'confidence' => $confidence,
                     'message' => (string) $preview['automation_error'],
+                    'debug' => !empty($preview['diagnostics']) ? $preview['diagnostics'] : array(),
                 ));
                 $failed++;
             }
@@ -1765,6 +1851,7 @@ trait KACO_AI_Generator_Trait {
                 'title' => (string) ($preview['title'] ?? ''),
                 'confidence' => $confidence,
                 'message' => !empty($preview['automation_error']) ? (string) $preview['automation_error'] : 'Preview requires manual review before creation.',
+                'debug' => !empty($preview['diagnostics']) ? $preview['diagnostics'] : array(),
             ));
             $review_items[] = $preview;
             $queued_for_review++;
@@ -2236,27 +2323,54 @@ trait KACO_AI_Generator_Trait {
         ));
 
         if (is_wp_error($response)) {
-            return false;
+            return $this->build_error_result('openai_request_failed', 'OpenAI request failed: ' . $response->get_error_message(), array(
+                'stage' => 'openai_request',
+                'endpoint' => $endpoint,
+                'model' => $model,
+            ));
         }
 
         $code = (int) wp_remote_retrieve_response_code($response);
         $raw = (string) wp_remote_retrieve_body($response);
         if ($code < 200 || $code >= 300 || $raw === '') {
-            return false;
+            return $this->build_error_result('openai_http_error', 'OpenAI returned HTTP ' . $code . '.', array(
+                'stage' => 'openai_request',
+                'endpoint' => $endpoint,
+                'model' => $model,
+                'http_code' => $code,
+                'body_excerpt' => substr($raw, 0, 500),
+            ));
         }
 
         $json = json_decode($raw, true);
         if (!is_array($json)) {
-            return false;
+            return $this->build_error_result('openai_invalid_json', 'OpenAI returned invalid JSON.', array(
+                'stage' => 'openai_response_parse',
+                'endpoint' => $endpoint,
+                'model' => $model,
+                'body_excerpt' => substr($raw, 0, 500),
+            ));
         }
 
         $content = $this->extract_openai_response_content($endpoint, $json);
         if ($content === '') {
-            return false;
+            return $this->build_error_result('openai_empty_content', 'OpenAI response did not contain usable content.', array(
+                'stage' => 'openai_response_extract',
+                'endpoint' => $endpoint,
+                'model' => $model,
+            ));
         }
 
         $decoded = json_decode($content, true);
-        return is_array($decoded) ? $decoded : false;
+        if (!is_array($decoded)) {
+            return $this->build_error_result('openai_invalid_json_payload', 'OpenAI content was not valid JSON for the expected schema.', array(
+                'stage' => 'openai_content_parse',
+                'endpoint' => $endpoint,
+                'model' => $model,
+                'content_excerpt' => substr($content, 0, 500),
+            ));
+        }
+        return $decoded;
     }
 
     private function build_openai_request_body($endpoint, $model, $system_prompt, $user_prompt) {

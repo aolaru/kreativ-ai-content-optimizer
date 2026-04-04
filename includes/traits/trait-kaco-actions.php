@@ -1073,6 +1073,7 @@ trait KACO_Actions_Trait {
             'suggestion_id' => (int) ($entry['suggestion_id'] ?? 0),
             'post_id' => (int) ($entry['post_id'] ?? 0),
             'confidence' => isset($entry['confidence']) ? round((float) $entry['confidence'], 2) : null,
+            'debug' => !empty($entry['debug']) ? $entry['debug'] : array(),
         );
         array_unshift($logs, $normalized);
         $this->set_automation_logs($logs);
@@ -1169,14 +1170,16 @@ trait KACO_Actions_Trait {
 
             if ($auto_generate) {
                 $ok = $this->generate_ai_for_row($row);
-                if (!$ok) {
+                if (is_wp_error($ok) || !$ok) {
+                    $message = is_wp_error($ok) ? $ok->get_error_message() : 'AI generation failed during automation.';
                     $this->append_automation_log(array(
                         'lane' => 'optimizer',
                         'action' => 'generate_ai',
                         'status' => 'failed',
                         'suggestion_id' => (int) $row['id'],
                         'post_id' => (int) $row['post_id'],
-                        'message' => 'AI generation failed during automation.',
+                        'message' => $message,
+                        'debug' => is_wp_error($ok) ? $this->extract_error_debug($ok) : array(),
                     ));
                     $result['failed']++;
                     continue;
