@@ -229,7 +229,7 @@ final class KACO_Plugin {
     }
 
     private function default_update_template() {
-        return "<h2>Why you should consider {{post_title}}</h2>\n<p>{{ai_intro}}</p>\n\n<h2>Visual character</h2>\n<p>{{visual_analysis}}</p>\n\n<h2>Best use cases</h2>\n{{best_for}}\n\n<h2>Font pairing ideas</h2>\n{{pairing_notes}}\n\n<h2>Font Features</h2>\n{{font_features}}\n\n<h2>What's Included</h2>\n{{whats_included}}\n\n<h2>Pricing</h2>\n{{pricing_details}}\n\n{{font_details}}\n";
+        return "{{tldr}}\n\n<h2>Why you should consider {{post_title}}</h2>\n<p>{{ai_intro}}</p>\n\n<h2>Visual character</h2>\n<p>{{visual_analysis}}</p>\n\n<h2>Best use cases</h2>\n{{best_for}}\n\n<h2>Font pairing ideas</h2>\n{{pairing_notes}}\n\n<h2>Font Features</h2>\n{{font_features}}\n\n<h2>What's Included</h2>\n{{whats_included}}\n\n<h2>Pricing</h2>\n{{pricing_details}}\n\n{{font_details}}\n";
     }
 
     private function migrate_update_template_default() {

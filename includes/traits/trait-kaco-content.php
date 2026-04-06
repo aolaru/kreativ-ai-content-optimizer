@@ -162,10 +162,17 @@ trait KACO_Content_Trait {
         $pricing_details = isset($context['pricing_details']) && is_array($context['pricing_details']) ? $this->bullet_list_html($context['pricing_details']) : '- Pricing details were not generated.';
         $verified_details = isset($context['verified_details']) && is_array($context['verified_details']) ? $this->bullet_list_html($context['verified_details']) : '- Verified details were not generated.';
         $font_details = '';
+        $tldr = '';
         if (!empty($context['font_details']) && is_string($context['font_details'])) {
             $font_details = trim((string) $context['font_details']);
         } elseif (!empty($context['font_category_hierarchy']) && is_array($context['font_category_hierarchy'])) {
             $hierarchy = (array) $context['font_category_hierarchy'];
+            $tldr = $this->build_generated_tldr_block(
+                $title,
+                (string) ($hierarchy['font_style_name'] ?? ''),
+                !empty($hierarchy['designer_names']) ? (array) $hierarchy['designer_names'] : array(),
+                (string) ($hierarchy['foundry_name'] ?? '')
+            );
             $font_details = $this->build_generated_font_details_section(
                 (string) ($hierarchy['font_style_name'] ?? ''),
                 !empty($hierarchy['font_mood_names']) ? (array) $hierarchy['font_mood_names'] : array(),
@@ -190,6 +197,7 @@ trait KACO_Content_Trait {
             '{{pricing_details}}' => $pricing_details,
             '{{verified_details}}' => $verified_details,
             '{{font_details}}' => $font_details,
+            '{{tldr}}' => $tldr,
         );
 
         return $this->cleanup_rendered_template(strtr((string) $template, $map));
