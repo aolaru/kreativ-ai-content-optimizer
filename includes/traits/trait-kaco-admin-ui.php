@@ -35,7 +35,28 @@ trait KACO_Admin_UI_Trait {
         $automation_last_run = get_option('kaco_automation_last_run', array());
 
         echo '<h2>Operations dashboard</h2>';
-        echo '<p>Use this plugin in five lanes: create new font posts, refresh existing content, review exceptions and approvals, maintain taxonomy structure, and manage settings.</p>';
+        echo '<p>Start from one of the three primary actions below. Everything else in the plugin is support or maintenance.</p>';
+
+        echo '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin:20px 0;">';
+        $this->render_primary_action_card(
+            'Add New Fonts',
+            'Use Create when you have marketplace URLs. Batches belong in Automation Queue; 1-3 URLs belong in Generate now.',
+            'Open Create',
+            admin_url('admin.php?page=kaco-dashboard&view=create')
+        );
+        $this->render_primary_action_card(
+            'Review Exceptions',
+            'Use Review when automation was uncertain, failed, or left approved items waiting for a final apply decision.',
+            'Open Review',
+            admin_url('admin.php?page=kaco-dashboard&view=review')
+        );
+        $this->render_primary_action_card(
+            'Run Refresh',
+            'Use Refresh to scan older posts and create improvement suggestions. It does not rewrite content immediately.',
+            'Open Refresh',
+            admin_url('admin.php?page=kaco-dashboard&view=refresh')
+        );
+        echo '</div>';
 
         echo '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:20px 0;">';
         $this->render_dashboard_card('Create', 'URL inbox waiting', (string) $url_inbox, 'Open Create', admin_url('admin.php?page=kaco-dashboard&view=create'));
@@ -74,13 +95,11 @@ trait KACO_Admin_UI_Trait {
             echo '</p>';
         }
 
-        echo '<h3>Main paths</h3>';
-        echo '<ol>';
-        echo '<li><strong>Create:</strong> add marketplace URLs and let automation schedule high-confidence posts.</li>';
-        echo '<li><strong>Refresh:</strong> scan older posts, queue work, and keep automation thresholds conservative.</li>';
-        echo '<li><strong>Review:</strong> handle only exceptions and approved items that need manual apply oversight.</li>';
-        echo '<li><strong>Taxonomy:</strong> clean hierarchy drift, category descriptions, and tags as maintenance.</li>';
-        echo '</ol>';
+        echo '<h3>Maintenance lanes</h3>';
+        echo '<ul>';
+        echo '<li><strong>Taxonomy:</strong> clean hierarchy drift, category descriptions, and tags when archive structure needs repair.</li>';
+        echo '<li><strong>Settings:</strong> change thresholds, automation behavior, and diagnostics only when you intend to alter operating mode.</li>';
+        echo '</ul>';
     }
 
     private function render_dashboard_card($lane, $label, $value, $action_label, $action_url) {
@@ -89,6 +108,14 @@ trait KACO_Admin_UI_Trait {
         echo '<div style="font-size:14px;color:#1d2327;margin-bottom:6px;">' . esc_html($label) . '</div>';
         echo '<div style="font-size:28px;font-weight:600;margin-bottom:10px;">' . esc_html($value) . '</div>';
         echo '<a href="' . esc_url($action_url) . '">' . esc_html($action_label) . '</a>';
+        echo '</div>';
+    }
+
+    private function render_primary_action_card($title, $description, $action_label, $action_url) {
+        echo '<div style="background:#fff;border:1px solid #dcdcde;padding:18px;">';
+        echo '<h3 style="margin-top:0;">' . esc_html($title) . '</h3>';
+        echo '<p style="min-height:54px;">' . esc_html($description) . '</p>';
+        echo '<p><a class="button button-primary" href="' . esc_url($action_url) . '">' . esc_html($action_label) . '</a></p>';
         echo '</div>';
     }
 
@@ -134,9 +161,17 @@ trait KACO_Admin_UI_Trait {
             return (string) ($item['status'] ?? '') === 'failed';
         }));
 
-        echo '<h2>Review center</h2>';
-        echo '<p>This lane combines manual review work: low-confidence exceptions, automation failures, and the main suggestions queue.</p>';
-        echo '<p>';
+        echo '<h2>Review inbox</h2>';
+        echo '<p>This lane is for triage. Work top to bottom: handle items that need review, then apply approved suggestions, then inspect failures if something looks wrong.</p>';
+
+        echo '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:18px 0;">';
+        $this->render_dashboard_card('Needs review', 'Old-post suggestions', (string) $needs_review_count, 'Open section', admin_url('admin.php?page=kaco-dashboard&view=review&review_filter=needs_review'));
+        $this->render_dashboard_card('Ready to apply', 'Approved suggestions', (string) $approved_count, 'Open section', admin_url('admin.php?page=kaco-dashboard&view=review&review_filter=approved'));
+        $this->render_dashboard_card('Generator', 'Queued previews', (string) $generator_count, 'Open section', admin_url('admin.php?page=kaco-dashboard&view=review&review_filter=generator'));
+        $this->render_dashboard_card('Failures', 'Automation failures', (string) $failed_logs_count, 'Open section', admin_url('admin.php?page=kaco-dashboard&view=review&review_filter=failed'));
+        echo '</div>';
+
+        echo '<p><strong>View:</strong> ';
         foreach (array(
             'all' => 'All',
             'needs_review' => 'Needs Review (' . $needs_review_count . ')',
@@ -534,11 +569,9 @@ trait KACO_Admin_UI_Trait {
             return in_array($status, array('failed', 'needs_review'), true);
         }));
 
-        echo '<h2>Exception inbox</h2>';
-        echo '<p>This is the manual review surface for automation fallout: low-confidence old-post suggestions, generator previews that were not auto-created, and automation failures that need retry or cleanup.</p>';
-
         if ($review_filter === 'all' || $review_filter === 'needs_review') {
-            echo '<h3>Old-post suggestions needing review</h3>';
+            echo '<h3>Needs review</h3>';
+            echo '<p class="description">These old-post suggestions were generated, but confidence was not high enough to bypass review.</p>';
         if (empty($needs_review_rows)) {
             echo '<p>No old-post suggestions are waiting in <code>needs_review</code>.</p>';
         } else {
@@ -561,7 +594,8 @@ trait KACO_Admin_UI_Trait {
         }
 
         if ($review_filter === 'all' || $review_filter === 'generator') {
-            echo '<h3>Generator review queue</h3>';
+            echo '<h3>Generator queue</h3>';
+            echo '<p class="description">These new-font previews were not auto-created. Create them now, retry extraction, or discard them.</p>';
         if (empty($generator_review)) {
             echo '<p>No generator previews are waiting for review.</p>';
         } else {
@@ -587,7 +621,8 @@ trait KACO_Admin_UI_Trait {
         }
 
         if ($review_filter === 'all' || $review_filter === 'failed') {
-            echo '<h3>Automation failure log</h3>';
+            echo '<h3>Failures</h3>';
+            echo '<p class="description">These are recent automation failures and escalations. Use diagnostics mode when you need to inspect the exact failing stage.</p>';
         if (empty($logs)) {
             echo '<p>No recent automation failures or review escalations.</p>';
         } else {
@@ -908,8 +943,8 @@ trait KACO_Admin_UI_Trait {
         }
         $rows = $wpdb->get_results("SELECT * FROM {$table} WHERE {$where} ORDER BY created_at DESC LIMIT 200", ARRAY_A);
 
-        echo '<h2>Suggestions queue</h2>';
-        echo '<p>All changes are pending by default. Apply creates a post revision automatically.</p>';
+        echo '<h2>Ready to apply</h2>';
+        echo '<p>Use this section for the main old-post queue. Apply writes a revisioned content update; pending and needs-review items should be promoted deliberately.</p>';
         echo '<p>';
         foreach (array('all' => 'All', 'pending' => 'Pending', 'needs_review' => 'Needs Review', 'approved' => 'Approved', 'missing_designer' => 'Missing Designer', 'missing_foundry' => 'Missing Foundry', 'missing_font_style' => 'Missing Font Style', 'missing_font_mood' => 'Missing Font Mood', 'missing_font_use_case' => 'Missing Font Use Case') as $key => $label) {
             $url = admin_url('admin.php?page=kaco-dashboard&view=suggestions' . ($key !== 'all' ? '&filter=' . $key : ''));
@@ -1219,8 +1254,14 @@ trait KACO_Admin_UI_Trait {
         echo '<td><input type="password" id="kaco_openai_api_key" name="kaco_openai_api_key" value="' . esc_attr($openai_key) . '" class="regular-text" autocomplete="off" /><p class="description">Required for every AI action in Create, Refresh, Review, and Categories.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_openai_model">OpenAI model</label></th>';
         echo '<td><input type="text" id="kaco_openai_model" name="kaco_openai_model" value="' . esc_attr($openai_model) . '" class="regular-text" /><p class="description">Current recommended default is <code>gpt-5-mini</code>. Change this only when you intentionally want different cost or quality behavior.</p></td></tr>';
+        echo '<tr><td colspan="2" style="padding:0;">';
+        echo '<details style="margin:8px 0 0 0;"><summary><strong>Advanced AI</strong></summary>';
+        echo '<table class="form-table" role="presentation"><tbody>';
         echo '<tr><th scope="row"><label for="kaco_openai_endpoint">OpenAI endpoint</label></th>';
         echo '<td><input type="url" id="kaco_openai_endpoint" name="kaco_openai_endpoint" value="' . esc_attr($openai_endpoint) . '" class="regular-text" /><p class="description">Advanced setting. Leave this on the default Responses API unless you are deliberately testing another endpoint.</p></td></tr>';
+        echo '</tbody></table>';
+        echo '</details>';
+        echo '</td></tr>';
         echo '</tbody></table>';
         echo '</div>';
 
@@ -1238,6 +1279,9 @@ trait KACO_Admin_UI_Trait {
         echo '<td><input type="number" step="0.01" min="0" max="1" id="kaco_ai_confidence_threshold" name="kaco_ai_confidence_threshold" value="' . esc_attr($ai_confidence_threshold) . '" /><p class="description">Apply is blocked below this value. Lowering it increases throughput but also increases editorial risk.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_enable_title_regenerator">Enable title regenerator</label></th>';
         echo '<td><label><input type="checkbox" id="kaco_enable_title_regenerator" name="kaco_enable_title_regenerator" value="1" ' . checked('1', $enable_title_regenerator, false) . ' /> yes</label><p class="description">Allows AI to replace weak titles during optimization. Turn this off if titles are already manually curated.</p></td></tr>';
+        echo '<tr><td colspan="2" style="padding:0;">';
+        echo '<details style="margin:8px 0 0 0;"><summary><strong>Advanced content rules</strong></summary>';
+        echo '<table class="form-table" role="presentation"><tbody>';
         echo '<tr><th scope="row"><label for="kaco_rewrite_mode">Rewrite mode</label></th>';
         echo '<td><select id="kaco_rewrite_mode" name="kaco_rewrite_mode">';
         echo '<option value="append"' . selected($rewrite_mode, 'append', false) . '>append</option>';
@@ -1248,6 +1292,9 @@ trait KACO_Admin_UI_Trait {
         echo '<td><textarea id="kaco_editorial_style_guide" name="kaco_editorial_style_guide" rows="8" cols="80" class="large-text">' . esc_textarea($editorial_style_guide) . '</textarea><p class="description">Optional house rules that should shape generator and optimizer prose.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_update_template">Content update template</label></th>';
         echo '<td><textarea id="kaco_update_template" name="kaco_update_template" rows="12" cols="80" class="large-text code">' . esc_textarea($template) . '</textarea><p class="description">Keep this aligned with the current new-font HTML structure. Use <code>{{tldr}}</code> and <code>{{font_details}}</code> for the current generator layout.</p></td></tr>';
+        echo '</tbody></table>';
+        echo '</details>';
+        echo '</td></tr>';
         echo '</tbody></table>';
         echo '</div>';
 
@@ -1283,6 +1330,21 @@ trait KACO_Admin_UI_Trait {
         echo '<td><input type="number" step="0.01" min="0" max="1" id="kaco_automation_approve_confidence" name="kaco_automation_approve_confidence" value="' . esc_attr($automation_approve_confidence) . '" /><p class="description">Keep this high. Lower values reduce manual work but increase false approvals.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_automation_auto_apply">Automation auto-apply approved suggestions</label></th>';
         echo '<td><label><input type="checkbox" id="kaco_automation_auto_apply" name="kaco_automation_auto_apply" value="1" ' . checked('1', $automation_auto_apply, false) . ' /> yes</label><p class="description">Highest-risk switch in the plugin. When enabled, high-confidence old-post rewrites are written to live content without another manual checkpoint.</p></td></tr>';
+        echo '<tr><td colspan="2" style="padding:0;">';
+        echo '<details style="margin:8px 0 0 0;"><summary><strong>Advanced automation controls</strong></summary>';
+        echo '<table class="form-table" role="presentation"><tbody>';
+        echo '<tr><th scope="row"><label for="kaco_automation_post_type">Automation post type</label></th>';
+        echo '<td><input type="text" id="kaco_automation_post_type" name="kaco_automation_post_type" value="' . esc_attr($automation_post_type) . '" class="regular-text" /><p class="description">Usually <code>post</code>. Change only if your font content lives in a custom post type.</p></td></tr>';
+        echo '<tr><th scope="row"><label for="kaco_automation_scan_limit">Automation scan limit</label></th>';
+        echo '<td><input type="number" min="1" max="500" id="kaco_automation_scan_limit" name="kaco_automation_scan_limit" value="' . (int) $automation_scan_limit . '" /><p class="description">Number of existing posts checked per scheduled run.</p></td></tr>';
+        echo '<tr><th scope="row"><label for="kaco_automation_issue_filter">Automation issue filter</label></th>';
+        echo '<td><select id="kaco_automation_issue_filter" name="kaco_automation_issue_filter">';
+        foreach (array('all' => 'all issues', 'missing_hierarchy' => 'missing hierarchy', 'thin' => 'thin content', 'stale' => 'stale content', 'low_links' => 'low internal links', 'duplicate' => 'duplicate risk', 'category_desc' => 'category description gaps') as $value => $label) {
+            echo '<option value="' . esc_attr($value) . '"' . selected($automation_issue_filter, $value, false) . '>' . esc_html($label) . '</option>';
+        }
+        echo '</select><p class="description">Use a narrow filter if you want automation to attack only one class of problem at a time.</p></td></tr>';
+        echo '<tr><th scope="row"><label for="kaco_automation_fonts_only">Automation fonts only</label></th>';
+        echo '<td><label><input type="checkbox" id="kaco_automation_fonts_only" name="kaco_automation_fonts_only" value="1" ' . checked('1', $automation_fonts_only, false) . ' /> yes</label><p class="description">Recommended. Keeps scheduled audits scoped to font content instead of the full site.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_automation_apply_confidence">Automation auto-apply confidence</label></th>';
         echo '<td><input type="number" step="0.01" min="0" max="1" id="kaco_automation_apply_confidence" name="kaco_automation_apply_confidence" value="' . esc_attr($automation_apply_confidence) . '" /><p class="description">Set this above the approval threshold. This should be your strictest gate.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_automation_process_url_inbox">Automation process queue</label></th>';
@@ -1298,11 +1360,23 @@ trait KACO_Admin_UI_Trait {
         echo '<tr><th scope="row"><label for="kaco_automation_generated_post_spacing_hours">Generated post spacing (hours)</label></th>';
         echo '<td><input type="number" min="1" max="24" id="kaco_automation_generated_post_spacing_hours" name="kaco_automation_generated_post_spacing_hours" value="' . (int) $automation_generated_post_spacing_hours . '" /><p class="description">Spacing between scheduled auto-created posts. This affects your publication cadence, not content quality.</p></td></tr>';
         echo '</tbody></table>';
+        echo '</details>';
+        echo '</td></tr>';
+        echo '</tbody></table>';
         echo '</div>';
 
         echo '<div style="' . esc_attr($section_style) . '">';
         echo '<h3 style="margin-top:0;">Taxonomy</h3>';
         echo '<p class="description">Controls the category hierarchy and tag hygiene rules the plugin enforces.</p>';
+        echo '<table class="form-table" role="presentation"><tbody>';
+        echo '<tr><th scope="row"><label for="kaco_category_desc_min_chars">Minimum category description chars</label></th>';
+        echo '<td><input type="number" min="20" max="2000" id="kaco_category_desc_min_chars" name="kaco_category_desc_min_chars" value="' . (int) $category_desc_min_chars . '" /><p class="description">Categories shorter than this are treated as needing description work.</p></td></tr>';
+        echo '<tr><th scope="row"><label for="kaco_tag_max_per_post">Maximum tags per post</label></th>';
+        echo '<td><input type="number" min="1" max="100" id="kaco_tag_max_per_post" name="kaco_tag_max_per_post" value="' . (int) $tag_max_per_post . '" /><p class="description">Posts above this threshold are flagged as over-tagged.</p></td></tr>';
+        echo '<tr><th scope="row"><label for="kaco_tag_min_posts_per_tag">Minimum posts per tag</label></th>';
+        echo '<td><input type="number" min="1" max="100" id="kaco_tag_min_posts_per_tag" name="kaco_tag_min_posts_per_tag" value="' . (int) $tag_min_posts_per_tag . '" /><p class="description">Tags used on fewer posts than this are candidates for cleanup or merge.</p></td></tr>';
+        echo '<tr><td colspan="2" style="padding:0;">';
+        echo '<details style="margin:8px 0 0 0;"><summary><strong>Advanced taxonomy mapping</strong></summary>';
         echo '<table class="form-table" role="presentation"><tbody>';
         echo '<tr><th scope="row"><label for="kaco_fonts_category_name">Fonts category name</label></th>';
         echo '<td><input type="text" id="kaco_fonts_category_name" name="kaco_fonts_category_name" value="' . esc_attr($fonts_category_name) . '" class="regular-text" /><p class="description">Top-level category used to scope font content.</p></td></tr>';
@@ -1316,12 +1390,9 @@ trait KACO_Admin_UI_Trait {
         echo '<td><input type="text" id="kaco_font_mood_parent_category_name" name="kaco_font_mood_parent_category_name" value="' . esc_attr($font_mood_parent_category_name) . '" class="regular-text" /><p class="description">Multi-value fixed list: ' . esc_html(implode(', ', $this->fixed_font_moods())) . '</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_font_use_case_parent_category_name">Font Use Case parent category</label></th>';
         echo '<td><input type="text" id="kaco_font_use_case_parent_category_name" name="kaco_font_use_case_parent_category_name" value="' . esc_attr($font_use_case_parent_category_name) . '" class="regular-text" /><p class="description">Multi-value fixed list: ' . esc_html(implode(', ', $this->fixed_font_use_cases())) . '</p></td></tr>';
-        echo '<tr><th scope="row"><label for="kaco_category_desc_min_chars">Minimum category description chars</label></th>';
-        echo '<td><input type="number" min="20" max="2000" id="kaco_category_desc_min_chars" name="kaco_category_desc_min_chars" value="' . (int) $category_desc_min_chars . '" /><p class="description">Categories shorter than this are treated as needing description work.</p></td></tr>';
-        echo '<tr><th scope="row"><label for="kaco_tag_max_per_post">Maximum tags per post</label></th>';
-        echo '<td><input type="number" min="1" max="100" id="kaco_tag_max_per_post" name="kaco_tag_max_per_post" value="' . (int) $tag_max_per_post . '" /><p class="description">Posts above this threshold are flagged as over-tagged.</p></td></tr>';
-        echo '<tr><th scope="row"><label for="kaco_tag_min_posts_per_tag">Minimum posts per tag</label></th>';
-        echo '<td><input type="number" min="1" max="100" id="kaco_tag_min_posts_per_tag" name="kaco_tag_min_posts_per_tag" value="' . (int) $tag_min_posts_per_tag . '" /><p class="description">Tags used on fewer posts than this are candidates for cleanup or merge.</p></td></tr>';
+        echo '</tbody></table>';
+        echo '</details>';
+        echo '</td></tr>';
         echo '</tbody></table>';
         echo '</div>';
 
