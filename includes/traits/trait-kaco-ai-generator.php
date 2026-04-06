@@ -651,6 +651,8 @@ trait KACO_AI_Generator_Trait {
                     'has_description' => !empty($source_context['description']),
                     'has_text_excerpt' => !empty($source_context['text_excerpt']),
                     'has_image_url' => !empty($source_context['image_url']),
+                    'http_code' => isset($source_context['http_code']) ? (int) $source_context['http_code'] : 0,
+                    'degraded_fetch' => !empty($source_context['degraded_fetch']),
                 ),
                 'entity_hints' => array(
                     'font_name_hint' => $font_name_hint,
@@ -1346,11 +1348,17 @@ trait KACO_AI_Generator_Trait {
             ));
         }
 
+        $marketplace = $this->detect_marketplace_name($url);
         $response = wp_remote_get($url, array(
             'timeout' => 20,
             'redirection' => 5,
             'headers' => array(
-                'User-Agent' => 'KREATIV-AI-Content-Optimizer/1.0; ' . home_url('/'),
+                'User-Agent' => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+                'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Accept-Language' => 'en-US,en;q=0.9',
+                'Cache-Control' => 'no-cache',
+                'Pragma' => 'no-cache',
+                'Referer' => home_url('/'),
             ),
         ));
         if (is_wp_error($response)) {
@@ -1362,7 +1370,17 @@ trait KACO_AI_Generator_Trait {
 
         $code = (int) wp_remote_retrieve_response_code($response);
         $html = (string) wp_remote_retrieve_body($response);
-        if ($code < 200 || $code >= 300 || $html === '') {
+        if ($html === '') {
+            return $this->build_error_result('source_fetch_http_error', 'Source fetch returned HTTP ' . $code . ' with an empty response body.', array(
+                'stage' => 'source_fetch',
+                'url' => $url,
+                'http_code' => $code,
+                'body_length' => 0,
+            ));
+        }
+
+        $allow_degraded_parse = in_array($code, array(401, 403, 429), true) && $this->source_html_looks_usable($html, $marketplace);
+        if (($code < 200 || $code >= 300) && !$allow_degraded_parse) {
             return $this->build_error_result('source_fetch_http_error', 'Source fetch returned HTTP ' . $code . '.', array(
                 'stage' => 'source_fetch',
                 'url' => $url,
@@ -1373,7 +1391,7 @@ trait KACO_AI_Generator_Trait {
 
         $og_image = $this->extract_meta_content($html, array('og:image', 'twitter:image'));
         $specimen_image = '';
-        if ($this->detect_marketplace_name($url) === 'MyFonts') {
+        if ($marketplace === 'MyFonts') {
             $specimen_image = $this->extract_myfonts_specimen_image($html);
         }
 
@@ -1383,7 +1401,38 @@ trait KACO_AI_Generator_Trait {
             'description' => $this->extract_meta_content($html, array('description', 'og:description', 'twitter:description')),
             'text_excerpt' => $this->extract_html_text_excerpt($html, 5000),
             'image_url' => $specimen_image !== '' ? $specimen_image : $og_image,
+            'http_code' => $code,
+            'degraded_fetch' => $allow_degraded_parse,
         );
+    }
+
+    private function source_html_looks_usable($html, $marketplace) {
+        $html = (string) $html;
+        if ($html === '') {
+            return false;
+        }
+
+        $title = $this->extract_html_title($html);
+        $og_title = $this->extract_meta_content($html, array('og:title', 'twitter:title'));
+        $description = $this->extract_meta_content($html, array('description', 'og:description', 'twitter:description'));
+        $text_excerpt = $this->extract_html_text_excerpt($html, 1200);
+        $blob = strtolower(trim(implode(' ', array_filter(array($title, $og_title, $description, $text_excerpt)))));
+
+        if ($blob === '') {
+            return false;
+        }
+
+        if ($marketplace === 'Creative Market') {
+            if (strpos($blob, 'creative market') !== false && (strpos($blob, 'font') !== false || strpos($blob, 'typeface') !== false)) {
+                return true;
+            }
+        }
+
+        if (strpos($blob, 'font') !== false || strpos($blob, 'typeface') !== false) {
+            return true;
+        }
+
+        return strlen($blob) > 120;
     }
 
     private function extract_source_entity_hints($url, $source_context, $font_name_hint, $foundry_hint) {
