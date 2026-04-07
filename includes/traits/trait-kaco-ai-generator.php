@@ -87,7 +87,11 @@ trait KACO_AI_Generator_Trait {
     public function handle_add_generator_urls_to_inbox() {
         $this->require_admin_request();
 
-        $urls = $this->normalize_generator_urls((string) wp_unslash($_POST['kaco_generator_inbox_urls'] ?? ''));
+        $raw_urls = (string) wp_unslash($_POST['kaco_generator_inbox_urls'] ?? '');
+        if ($raw_urls === '') {
+            $raw_urls = (string) wp_unslash($_POST['kaco_generator_urls'] ?? '');
+        }
+        $urls = $this->normalize_generator_urls($raw_urls);
         if (empty($urls)) {
             $this->redirect_with_notice('No marketplace URLs were provided for the inbox.', 'generator');
         }
