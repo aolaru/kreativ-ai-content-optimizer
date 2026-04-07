@@ -40,7 +40,7 @@ trait KACO_Admin_UI_Trait {
         echo '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin:20px 0;">';
         $this->render_primary_action_card(
             'Add New Fonts',
-            'Use Create when you have marketplace URLs. Batches belong in Automation Queue; 1-3 URLs belong in Generate now.',
+            'Use Create when you have marketplace URLs. Batches belong in Automation Queue; Generate now is safest for a single URL.',
             'Open Create',
             admin_url('admin.php?page=kaco-dashboard&view=create')
         );

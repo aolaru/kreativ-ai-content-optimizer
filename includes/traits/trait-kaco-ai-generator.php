@@ -2,7 +2,7 @@
 
 trait KACO_AI_Generator_Trait {
     private function generator_manual_preview_limit() {
-        return 3;
+        return 1;
     }
 
     private function diagnostics_enabled() {
@@ -1451,7 +1451,7 @@ trait KACO_AI_Generator_Trait {
             'title' => $this->extract_html_title($html),
             'og_title' => $this->extract_meta_content($html, array('og:title', 'twitter:title')),
             'description' => $this->extract_meta_content($html, array('description', 'og:description', 'twitter:description')),
-            'text_excerpt' => $this->extract_html_text_excerpt($html, 5000),
+            'text_excerpt' => $this->extract_html_text_excerpt($html, 2500),
             'image_url' => $specimen_image !== '' ? $specimen_image : $og_image,
             'http_code' => $code,
             'degraded_fetch' => $allow_degraded_parse,
