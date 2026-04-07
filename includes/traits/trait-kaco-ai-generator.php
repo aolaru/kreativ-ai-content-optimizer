@@ -1,6 +1,10 @@
 <?php
 
 trait KACO_AI_Generator_Trait {
+    private function generator_manual_preview_limit() {
+        return 3;
+    }
+
     private function diagnostics_enabled() {
         return get_option('kaco_debug_mode', '0') === '1';
     }
@@ -259,6 +263,14 @@ trait KACO_AI_Generator_Trait {
             $this->redirect_with_notice('No marketplace URLs were provided.', 'generator');
         }
 
+        $manual_limit = $this->generator_manual_preview_limit();
+        if (count($urls) > $manual_limit) {
+            $this->redirect_with_notice(
+                'Generate now accepts up to ' . $manual_limit . ' URL(s) at a time. Use Automation Queue for larger batches.',
+                'generator'
+            );
+        }
+
         $previews = array();
         foreach ($urls as $url) {
             $preview = $this->request_generator_preview($url);
@@ -283,7 +295,10 @@ trait KACO_AI_Generator_Trait {
         }
 
         $this->set_generator_previews($previews);
-        $this->redirect_with_notice(count($previews) . ' preview(s) generated.', 'generator');
+        $this->redirect_with_notice(
+            count($previews) . ' preview(s) generated. High-confidence items can be created immediately; failed items will stay here for review.',
+            'generator'
+        );
     }
 
     public function handle_create_generated_drafts() {

@@ -315,17 +315,22 @@ trait KACO_Admin_UI_Trait {
         $inbox = $this->get_generator_url_inbox();
         $automation_enabled = get_option('kaco_automation_enabled', '0') === '1';
         $automation_process_inbox = get_option('kaco_automation_process_url_inbox', '1') === '1';
+        $manual_limit = $this->generator_manual_preview_limit();
 
         echo '<h2>Font Generator</h2>';
-        echo '<p>Generate draft-ready commercial font posts from marketplace URLs, either by handing them to automation for later processing or by generating previews immediately.</p>';
+        echo '<p>Generate draft-ready commercial font posts from marketplace URLs. Use Automation Queue for batches and Generate now for quick manual work.</p>';
 
         echo '<div style="display:grid;grid-template-columns:minmax(0,1fr);gap:24px;">';
 
         if ($automation_enabled && $automation_process_inbox) {
             echo '<div style="background:#fff;border:1px solid #dcdcde;padding:16px;">';
             echo '<h3 style="margin-top:0;">Process later</h3>';
-            echo '<p><strong>Automation Queue</strong></p>';
+            echo '<p><strong>Automation Queue</strong> <span style="color:#2271b1;">Recommended for batches</span></p>';
             echo '<p class="description" style="margin-top:0;">Paste raw marketplace URLs here. Automation will process them later in scheduled batches instead of generating previews right now.</p>';
+            echo '<div style="background:#f6f7f7;border-left:4px solid #2271b1;padding:10px 12px;margin:12px 0;">';
+            echo '<strong>What happens next</strong><br/>';
+            echo 'Queued URLs are processed in batches. Strong items become posts automatically; weaker or failed items move to Review.';
+            echo '</div>';
             echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
             wp_nonce_field(self::NONCE_ACTION);
             echo '<input type="hidden" name="action" value="kaco_add_generator_urls_to_inbox" />';
@@ -351,13 +356,18 @@ trait KACO_Admin_UI_Trait {
             echo '<input type="hidden" name="action" value="kaco_process_generator_queue_now" />';
             submit_button('Process Automation Queue Now', 'secondary', 'submit', false);
             echo '</form>';
-            echo '<p class="description">Use this when you want the queue processed immediately instead of waiting for WP-Cron.</p>';
+            echo '<p class="description">Use this when you want the queue processed immediately instead of waiting for WP-Cron. After processing, items leave the queue and either become posts or move to Review.</p>';
             echo '</div>';
         }
 
         echo '<div style="background:#fff;border:1px solid #dcdcde;padding:16px;">';
         echo '<h3 style="margin-top:0;">Generate now</h3>';
+        echo '<p><strong>Immediate manual mode</strong> <span style="color:#2271b1;">Recommended for 1-' . (int) $manual_limit . ' URLs</span></p>';
         echo '<p class="description" style="margin-top:0;">Use this when you want immediate previews and manual control instead of waiting for automation.</p>';
+        echo '<div style="background:#f6f7f7;border-left:4px solid #dba617;padding:10px 12px;margin:12px 0;">';
+        echo '<strong>What happens next</strong><br/>';
+        echo 'The plugin fetches each URL and generates previews in this browser request. Large batches can time out, so this mode is capped at ' . (int) $manual_limit . ' URLs.';
+        echo '</div>';
 
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
         wp_nonce_field(self::NONCE_ACTION);
@@ -365,7 +375,7 @@ trait KACO_Admin_UI_Trait {
         echo '<table class="form-table" role="presentation"><tbody>';
         echo '<tr><th scope="row"><label for="kaco_generator_urls">Marketplace URLs</label></th>';
         echo '<td><textarea id="kaco_generator_urls" name="kaco_generator_urls" rows="8" cols="100" class="large-text code" placeholder="https://www.myfonts.com/...&#10;https://creativemarket.com/..."></textarea>';
-        echo '<p class="description">One URL per line. Supported workflow is best-effort generation using the same OpenAI settings as this plugin.</p></td></tr>';
+        echo '<p class="description">One URL per line. Maximum ' . (int) $manual_limit . ' URLs per run. Use Automation Queue for anything larger.</p></td></tr>';
         echo '</tbody></table>';
         submit_button('Generate Draft Previews');
         echo '</form>';
