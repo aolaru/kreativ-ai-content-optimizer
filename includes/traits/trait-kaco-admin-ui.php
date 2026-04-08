@@ -396,6 +396,9 @@ trait KACO_Admin_UI_Trait {
         );
 
         foreach ($review_previews as $index => $item) {
+            $can_create = empty($item['automation_error'])
+                && trim((string) ($item['title'] ?? '')) !== ''
+                && trim((string) ($item['content'] ?? '')) !== '';
             echo '<div style="border:1px solid #ccd0d4;padding:12px;margin:0 0 18px 0;background:#fff;">';
             echo '<p><strong>Source:</strong> ' . esc_html((string) ($item['preview_source'] ?? 'manual')) . '</p>';
             echo '<p><strong>Source URL:</strong> ' . esc_html((string) ($item['url'] ?? '')) . '</p>';
@@ -425,9 +428,12 @@ trait KACO_Admin_UI_Trait {
             echo '<p><label><strong>Page Summary</strong><br/><textarea name="previews[' . (int) $index . '][summary_excerpt]" rows="3" class="large-text">' . esc_textarea((string) ($item['summary_excerpt'] ?? '')) . '</textarea></label></p>';
             echo '<p><label><strong>Content</strong><br/><textarea name="previews[' . (int) $index . '][content]" rows="18" class="large-text code">' . esc_textarea((string) ($item['content'] ?? '')) . '</textarea></label></p>';
             echo '<p>';
-            echo '<label style="margin-right:16px;"><input type="checkbox" name="previews[' . (int) $index . '][create]" value="1" checked="checked" /> create draft</label>';
+            echo '<label style="margin-right:16px;"><input type="checkbox" name="previews[' . (int) $index . '][create]" value="1"' . ($can_create ? ' checked="checked"' : '') . ' /> create draft</label>';
             echo '<label><input type="checkbox" name="previews[' . (int) $index . '][discard]" value="1" /> remove from review queue</label>';
             echo '</p>';
+            if (!$can_create) {
+                echo '<p class="description">This item is not ready for draft creation yet. Retry generation or edit the missing fields first.</p>';
+            }
             echo '</div>';
         }
 

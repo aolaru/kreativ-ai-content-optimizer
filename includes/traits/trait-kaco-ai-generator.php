@@ -2023,10 +2023,20 @@ trait KACO_AI_Generator_Trait {
         $title = sanitize_text_field((string) ($preview['title'] ?? ''));
         $content = wp_kses_post((string) ($preview['content'] ?? ''));
         $summary_excerpt = sanitize_textarea_field((string) ($preview['summary_excerpt'] ?? ''));
+        $automation_error = sanitize_text_field((string) ($preview['automation_error'] ?? ''));
         if ($summary_excerpt === '') {
             $summary_excerpt = $this->build_generated_summary_excerpt($preview);
         }
         $source_url = esc_url_raw((string) ($preview['url'] ?? ''));
+        if ($title === '' && $source_url !== '') {
+            $fallback_name = $this->infer_font_name_from_source_url($source_url);
+            if ($fallback_name !== '') {
+                $title = $fallback_name;
+            }
+        }
+        if ($automation_error !== '' && $title === '') {
+            return new WP_Error('preview_not_ready', 'This preview failed generation earlier. Retry preview generation before creating a draft.');
+        }
         if ($title === '' || $content === '') {
             return new WP_Error('missing_preview_fields', 'Generated preview is missing a title or content.');
         }
