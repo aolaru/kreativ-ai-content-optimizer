@@ -277,7 +277,7 @@ trait KACO_AI_Generator_Trait {
 
         $previews = array();
         foreach ($urls as $url) {
-            $preview = $this->request_generator_preview($url);
+            $preview = $this->request_generator_preview($url, 'fast');
             if (is_wp_error($preview)) {
                 $previews[] = array(
                     'url' => esc_url_raw($url),
@@ -389,11 +389,12 @@ trait KACO_AI_Generator_Trait {
         return $normalized;
     }
 
-    private function request_generator_preview($url) {
+    private function request_generator_preview($url, $mode = 'full') {
         $api_key = (string) get_option('kaco_openai_api_key', '');
         $endpoint = (string) get_option('kaco_openai_endpoint', self::OPENAI_ENDPOINT);
         $model = (string) get_option('kaco_openai_model', self::OPENAI_MODEL);
         $editorial_style_guide = (string) get_option('kaco_editorial_style_guide', '');
+        $mode = $mode === 'fast' ? 'fast' : 'full';
 
         $url = esc_url_raw((string) $url);
         if ($api_key === '' || $endpoint === '' || $model === '' || $url === '') {
@@ -415,9 +416,14 @@ trait KACO_AI_Generator_Trait {
         $font_name_hint = $this->infer_font_name_from_source_url($url, $source_context);
         $foundry_hint = $this->infer_foundry_name_from_source_url($url, $source_context);
         $source_entity_hints = $this->extract_source_entity_hints($url, $source_context, $font_name_hint, $foundry_hint);
-        $system_prompt = 'You generate structured draft proposals for commercial font review posts. Return valid minified JSON only. No markdown code fences. Do not invent technical features that are not clearly supported.';
+        $system_prompt = $mode === 'fast'
+            ? 'You generate fast structured preview proposals for commercial font review posts. Return valid minified JSON only. No markdown code fences. Keep the output lean and factual.'
+            : 'You generate structured draft proposals for commercial font review posts. Return valid minified JSON only. No markdown code fences. Do not invent technical features that are not clearly supported.';
         $user_prompt = wp_json_encode(array(
-            'task' => 'Generate a draft-ready font post proposal from a marketplace URL.',
+            'task' => $mode === 'fast'
+                ? 'Generate a fast preview proposal from a marketplace URL. Prioritize title, core entities, short summary, and one concise intro paragraph.'
+                : 'Generate a draft-ready font post proposal from a marketplace URL.',
+            'generation_mode' => $mode,
             'source_url' => $url,
             'source_hints' => array(
                 'font_name_hint' => $font_name_hint,
@@ -426,61 +432,103 @@ trait KACO_AI_Generator_Trait {
                 'foundry_context_hint' => $source_entity_hints['foundry_name'],
             ),
             'source_context' => $source_context,
-            'output_schema' => array(
-                'title' => 'string',
-                'image_url' => 'string',
-                'designer_names' => array('1 or more designer names'),
-                'foundry_name' => 'string',
-                'font_style_name' => 'one of the fixed font styles only',
-                'font_mood_names' => array('1 or more fixed font moods'),
-                'font_use_case_names' => array('1 or more fixed font use cases'),
-                'tags' => array('5 to 10 specific tag strings'),
-                'summary_excerpt' => 'single sentence, 150 to 220 characters, factual and natural',
-                'refreshed_intro' => 'string',
-                'visual_analysis' => 'string',
-                'best_for' => array('3 to 5 specific use cases'),
-                'pairing_notes' => array('2 to 4 specific pairing recommendations'),
-                'font_features' => array('verified feature bullets only'),
-                'whats_included' => array('verified included items only'),
-                'pricing_details' => array('verified pricing bullets only'),
-                'verified_details' => array('verified fact bullets only'),
-                'evidence' => array(
-                    'designer' => 'string',
-                    'foundry' => 'string',
-                    'font_style' => 'string',
-                    'font_mood' => 'string',
-                    'font_use_case' => 'string',
+            'output_schema' => $mode === 'fast'
+                ? array(
+                    'title' => 'string',
+                    'image_url' => 'string',
+                    'designer_names' => array('1 or more designer names'),
+                    'foundry_name' => 'string',
+                    'font_style_name' => 'one of the fixed font styles only',
+                    'font_mood_names' => array('1 or more fixed font moods'),
+                    'font_use_case_names' => array('1 or more fixed font use cases'),
+                    'tags' => array('3 to 8 specific tag strings'),
+                    'summary_excerpt' => 'single sentence, 120 to 200 characters, factual and natural',
+                    'refreshed_intro' => '1 concise paragraph',
+                    'evidence' => array(
+                        'designer' => 'string',
+                        'foundry' => 'string',
+                        'font_style' => 'string',
+                        'font_mood' => 'string',
+                        'font_use_case' => 'string',
+                    ),
+                    'confidence' => 'number 0..1',
+                )
+                : array(
+                    'title' => 'string',
+                    'image_url' => 'string',
+                    'designer_names' => array('1 or more designer names'),
+                    'foundry_name' => 'string',
+                    'font_style_name' => 'one of the fixed font styles only',
+                    'font_mood_names' => array('1 or more fixed font moods'),
+                    'font_use_case_names' => array('1 or more fixed font use cases'),
+                    'tags' => array('5 to 10 specific tag strings'),
+                    'summary_excerpt' => 'single sentence, 150 to 220 characters, factual and natural',
+                    'refreshed_intro' => 'string',
+                    'visual_analysis' => 'string',
+                    'best_for' => array('3 to 5 specific use cases'),
+                    'pairing_notes' => array('2 to 4 specific pairing recommendations'),
+                    'font_features' => array('verified feature bullets only'),
+                    'whats_included' => array('verified included items only'),
+                    'pricing_details' => array('verified pricing bullets only'),
+                    'verified_details' => array('verified fact bullets only'),
+                    'evidence' => array(
+                        'designer' => 'string',
+                        'foundry' => 'string',
+                        'font_style' => 'string',
+                        'font_mood' => 'string',
+                        'font_use_case' => 'string',
+                    ),
+                    'confidence' => 'number 0..1',
                 ),
-                'confidence' => 'number 0..1',
-            ),
-            'required_sections' => array(
-                '2 to 4 sentence intro',
-                'visual analysis paragraph',
-                'specific best-for items',
-                'pairing notes paragraph',
-                'verified details list',
-            ),
-            'house_rules' => array(
-                'keep the marketplace purchase link in the CTA and first mention',
-                'summary_excerpt must be exactly one sentence and about 150 to 220 characters',
-                'summary_excerpt must feel natural and editorial, not templated',
-                'summary_excerpt must not include URLs, marketplace boilerplate, or free-download warnings',
-                'write like an editorial font reviewer, not a generic marketplace summary',
-                'avoid filler phrases like versatile, unique touch, reliable choice, and suitable for various projects',
-                'use at least two concrete visual observations',
-                'best use cases must be specific to the font style',
-                'avoid generic use case bullets such as branding and logos, editorial and social media, and packaging and display unless the source clearly justifies them',
-                'do not repeat the foundry name as the font name or the font name as the foundry',
-                'use source_context and source_hints as primary evidence, do not infer entities from brand names loosely',
-                'do not swap font name and foundry name',
-                'pairing notes must recommend 2 to 4 contrasting or supporting font directions and explain why each pairing works',
-                'title_and_cta_must_use_the_font_name_hint_if_it_is_present',
-                'if_designer_or_foundry_is_uncertain_leave_it_blank_do_not_guess',
-                'font_features_whats_included_and_pricing_must_only_use_explicitly_supported_facts',
-                'verified details must only include facts that are likely explicit on the source page',
-                'do not claim free download availability',
-                'title should be in format Font Name - four word descriptor when possible',
-            ),
+            'required_sections' => $mode === 'fast'
+                ? array(
+                    'single-sentence summary',
+                    'one concise intro paragraph',
+                )
+                : array(
+                    '2 to 4 sentence intro',
+                    'visual analysis paragraph',
+                    'specific best-for items',
+                    'pairing notes paragraph',
+                    'verified details list',
+                ),
+            'house_rules' => $mode === 'fast'
+                ? array(
+                    'keep the marketplace purchase link in the CTA and first mention',
+                    'summary_excerpt must be exactly one sentence and about 120 to 200 characters',
+                    'summary_excerpt must feel natural and editorial, not templated',
+                    'summary_excerpt must not include URLs, marketplace boilerplate, or free-download warnings',
+                    'write like an editorial font reviewer, not a generic marketplace summary',
+                    'do not repeat the foundry name as the font name or the font name as the foundry',
+                    'use source_context and source_hints as primary evidence, do not infer entities from brand names loosely',
+                    'do not swap font name and foundry name',
+                    'title_and_cta_must_use_the_font_name_hint_if_it_is_present',
+                    'if_designer_or_foundry_is_uncertain_leave_it_blank_do_not_guess',
+                    'do not claim free download availability',
+                    'title should be in format Font Name - four word descriptor when possible',
+                    'keep the response lean for speed',
+                )
+                : array(
+                    'keep the marketplace purchase link in the CTA and first mention',
+                    'summary_excerpt must be exactly one sentence and about 150 to 220 characters',
+                    'summary_excerpt must feel natural and editorial, not templated',
+                    'summary_excerpt must not include URLs, marketplace boilerplate, or free-download warnings',
+                    'write like an editorial font reviewer, not a generic marketplace summary',
+                    'avoid filler phrases like versatile, unique touch, reliable choice, and suitable for various projects',
+                    'use at least two concrete visual observations',
+                    'best use cases must be specific to the font style',
+                    'avoid generic use case bullets such as branding and logos, editorial and social media, and packaging and display unless the source clearly justifies them',
+                    'do not repeat the foundry name as the font name or the font name as the foundry',
+                    'use source_context and source_hints as primary evidence, do not infer entities from brand names loosely',
+                    'do not swap font name and foundry name',
+                    'pairing notes must recommend 2 to 4 contrasting or supporting font directions and explain why each pairing works',
+                    'title_and_cta_must_use_the_font_name_hint_if_it_is_present',
+                    'if_designer_or_foundry_is_uncertain_leave_it_blank_do_not_guess',
+                    'font_features_whats_included_and_pricing_must_only_use_explicitly_supported_facts',
+                    'verified details must only include facts that are likely explicit on the source page',
+                    'do not claim free download availability',
+                    'title should be in format Font Name - four word descriptor when possible',
+                ),
             'category_targets' => $targets,
             'fixed_font_styles' => $this->fixed_font_styles(),
             'fixed_font_moods' => $this->fixed_font_moods(),
