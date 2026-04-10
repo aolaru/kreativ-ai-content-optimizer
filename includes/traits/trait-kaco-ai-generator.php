@@ -389,10 +389,110 @@ trait KACO_AI_Generator_Trait {
         return $normalized;
     }
 
-    private function request_generator_preview($url, $mode = 'full') {
+    private function request_generator_queue_preview($url) {
+        $source_result = $this->fetch_source_context($url);
+        if (is_wp_error($source_result)) {
+            return $source_result;
+        }
+        $source_context = is_array($source_result) ? $source_result : array();
+
+        $preview = $this->request_generator_preview($url, 'full', '', $source_context);
+        if (!is_wp_error($preview)) {
+            return $preview;
+        }
+
+        if (!$this->is_retryable_generator_preview_error($preview)) {
+            $debug = $this->extract_error_debug($preview);
+            if (!is_array($debug)) {
+                $debug = array();
+            }
+            $debug['source_context'] = $source_context;
+            $preview->add_data($debug);
+            return $preview;
+        }
+
+        $fallback_model = 'gpt-4.1-mini';
+        $current_model = (string) get_option('kaco_openai_model', self::OPENAI_MODEL);
+        $retry_model = $current_model === $fallback_model ? $current_model : $fallback_model;
+        $this->append_automation_log(array(
+            'lane' => 'generator',
+            'action' => 'generate_preview_retry',
+            'status' => 'retrying',
+            'url' => $url,
+            'message' => 'Retrying preview generation after timeout.',
+            'debug' => array(
+                'reason' => $preview->get_error_message(),
+                'current_model' => $current_model,
+                'retry_model' => $retry_model,
+            ),
+        ));
+
+        $retried = $this->request_generator_preview($url, 'full', $retry_model, $source_context);
+        if (!is_wp_error($retried)) {
+            $retried['automation_note'] = $current_model === $retry_model
+                ? 'Preview generated after timeout retry.'
+                : 'Preview generated after timeout retry with fallback model.';
+            return $retried;
+        }
+
+        $debug = $this->extract_error_debug($retried);
+        if (!is_array($debug)) {
+            $debug = array();
+        }
+        $debug['source_context'] = $source_context;
+        $debug['retry_model'] = $retry_model;
+        $retried->add_data($debug);
+        return $retried;
+    }
+
+    private function is_retryable_generator_preview_error($error) {
+        if (!is_wp_error($error)) {
+            return false;
+        }
+        return strpos(strtolower((string) $error->get_error_message()), 'curl error 28') !== false;
+    }
+
+    private function build_generator_review_item_from_source($url, $source_context, $error_message, $debug = array()) {
+        $font_name = $this->infer_font_name_from_source_url($url, $source_context);
+        $foundry_name = $this->infer_foundry_name_from_source_url($url, $source_context);
+        $entity_hints = $this->extract_source_entity_hints($url, $source_context, $font_name, $foundry_name);
+        $designer_names = !empty($entity_hints['designer_names']) ? (array) $entity_hints['designer_names'] : array();
+        $title = $this->sanitize_generated_title('', $font_name);
+        $summary_excerpt = $this->build_generated_summary_excerpt(array(
+            'title' => $title,
+            'font_style_name' => '',
+            'designer_names' => $designer_names,
+            'foundry_name' => $foundry_name,
+            'font_mood_names' => array(),
+            'font_use_case_names' => array(),
+        ));
+
+        return array(
+            'preview_source' => 'automation',
+            'url' => esc_url_raw($url),
+            'title' => $title,
+            'image_url' => esc_url_raw((string) ($source_context['image_url'] ?? '')),
+            'designer_names' => $designer_names,
+            'foundry_name' => $foundry_name,
+            'font_style_name' => '',
+            'font_mood_names' => array(),
+            'font_use_case_names' => array(),
+            'tags' => array(),
+            'summary_excerpt' => $summary_excerpt,
+            'content' => '<p>Source metadata was extracted, but AI content generation timed out. Retry generation before creating a draft.</p>',
+            'confidence' => 0.25,
+            'automation_error' => $error_message,
+            'diagnostics' => $debug,
+        );
+    }
+
+    private function request_generator_preview($url, $mode = 'full', $model_override = '', $source_context_override = null) {
         $api_key = (string) get_option('kaco_openai_api_key', '');
         $endpoint = (string) get_option('kaco_openai_endpoint', self::OPENAI_ENDPOINT);
         $model = (string) get_option('kaco_openai_model', self::OPENAI_MODEL);
+        if ($model_override !== '') {
+            $model = (string) $model_override;
+        }
         $editorial_style_guide = (string) get_option('kaco_editorial_style_guide', '');
         $mode = $mode === 'fast' ? 'fast' : 'full';
 
@@ -407,12 +507,18 @@ trait KACO_AI_Generator_Trait {
             ));
         }
 
-        $targets = $this->font_category_parent_targets();
-        $source_result = $this->fetch_source_context($url);
-        if (is_wp_error($source_result)) {
-            return $source_result;
+        if (is_array($source_context_override)) {
+            $source_context = $source_context_override;
+        } else {
+            $source_result = $this->fetch_source_context($url);
+            if (is_wp_error($source_result)) {
+                return $source_result;
+            }
+            $source_context = is_array($source_result) ? $source_result : array();
         }
-        $source_context = is_array($source_result) ? $source_result : array();
+        $prompt_source_context = $mode === 'fast'
+            ? $this->build_generator_prompt_source_context($source_context, true)
+            : $this->build_generator_prompt_source_context($source_context, false);
         $font_name_hint = $this->infer_font_name_from_source_url($url, $source_context);
         $foundry_hint = $this->infer_foundry_name_from_source_url($url, $source_context);
         $source_entity_hints = $this->extract_source_entity_hints($url, $source_context, $font_name_hint, $foundry_hint);
@@ -431,7 +537,7 @@ trait KACO_AI_Generator_Trait {
                 'designer_hints' => $source_entity_hints['designer_names'],
                 'foundry_context_hint' => $source_entity_hints['foundry_name'],
             ),
-            'source_context' => $source_context,
+            'source_context' => $prompt_source_context,
             'output_schema' => $mode === 'fast'
                 ? array(
                     'title' => 'string',
@@ -529,11 +635,11 @@ trait KACO_AI_Generator_Trait {
                     'do not claim free download availability',
                     'title should be in format Font Name - four word descriptor when possible',
                 ),
-            'category_targets' => $targets,
+            'category_targets' => $mode === 'fast' ? array() : $this->font_category_parent_targets(),
             'fixed_font_styles' => $this->fixed_font_styles(),
             'fixed_font_moods' => $this->fixed_font_moods(),
             'fixed_font_use_cases' => $this->fixed_font_use_cases(),
-            'editorial_style_guide' => $editorial_style_guide,
+            'editorial_style_guide' => $mode === 'fast' ? '' : $editorial_style_guide,
         ));
 
         $decoded = $this->request_openai_json_payload($api_key, $endpoint, $model, $system_prompt, $user_prompt);
@@ -542,6 +648,25 @@ trait KACO_AI_Generator_Trait {
         }
 
         return $this->sanitize_generator_preview($decoded, $url, $source_context);
+    }
+
+    private function build_generator_prompt_source_context($source_context, $fast = false) {
+        $context = array(
+            'title' => (string) ($source_context['title'] ?? ''),
+            'og_title' => (string) ($source_context['og_title'] ?? ''),
+            'description' => (string) ($source_context['description'] ?? ''),
+            'image_url' => (string) ($source_context['image_url'] ?? ''),
+            'http_code' => isset($source_context['http_code']) ? (int) $source_context['http_code'] : 0,
+            'degraded_fetch' => !empty($source_context['degraded_fetch']),
+        );
+
+        $excerpt = trim((string) ($source_context['text_excerpt'] ?? ''));
+        if ($excerpt !== '') {
+            $limit = $fast ? 600 : 1800;
+            $context['text_excerpt'] = $this->smart_truncate_summary($excerpt, $limit);
+        }
+
+        return $context;
     }
 
     private function sanitize_generator_preview($payload, $url, $source_context = array()) {
@@ -1925,7 +2050,7 @@ trait KACO_AI_Generator_Trait {
                 continue;
             }
 
-            $preview = $this->request_generator_preview($url);
+            $preview = $this->request_generator_queue_preview($url);
             if (is_wp_error($preview)) {
                 $error_message = $preview->get_error_message();
                 $debug = $this->extract_error_debug($preview);
@@ -1937,22 +2062,8 @@ trait KACO_AI_Generator_Trait {
                     'message' => $error_message,
                     'debug' => $debug,
                 ));
-                $review_items[] = array(
-                    'preview_source' => 'automation',
-                    'url' => $url,
-                    'title' => '',
-                    'image_url' => '',
-                    'designer_names' => array(),
-                    'foundry_name' => '',
-                    'font_style_name' => '',
-                    'font_mood_names' => array(),
-                    'font_use_case_names' => array(),
-                    'tags' => array(),
-                    'content' => '<p>Generation failed for this URL. Review the source manually.</p>',
-                    'confidence' => 0,
-                    'automation_error' => $error_message,
-                    'diagnostics' => $debug,
-                );
+                $source_context = !empty($debug['source_context']) && is_array($debug['source_context']) ? $debug['source_context'] : array();
+                $review_items[] = $this->build_generator_review_item_from_source($url, $source_context, $error_message, $debug);
                 $queued_for_review++;
                 $failed++;
                 continue;
