@@ -260,7 +260,51 @@ trait KACO_AI_Generator_Trait {
 
     public function handle_generate_font_previews() {
         $this->require_admin_request();
-        $this->redirect_with_notice('Manual preview generation has been removed. Add URLs to the Automation Queue instead.', 'generator');
+        if (get_option('kaco_enable_manual_generator_previews', '0') !== '1') {
+            $this->redirect_with_notice('Manual preview generation is disabled. Add URLs to the Automation Queue instead.', 'generator');
+        }
+
+        $urls = $this->normalize_generator_urls((string) wp_unslash($_POST['kaco_generator_urls'] ?? ''));
+        if (empty($urls)) {
+            $this->redirect_with_notice('No marketplace URLs were provided.', 'generator');
+        }
+
+        $manual_limit = $this->generator_manual_preview_limit();
+        if (count($urls) > $manual_limit) {
+            $this->redirect_with_notice(
+                'Generate now accepts up to ' . $manual_limit . ' URL(s) at a time. Use Automation Queue for larger batches.',
+                'generator'
+            );
+        }
+
+        $previews = array();
+        foreach ($urls as $url) {
+            $preview = $this->request_generator_preview($url, 'fast');
+            if (is_wp_error($preview)) {
+                $previews[] = array(
+                    'url' => esc_url_raw($url),
+                    'title' => '',
+                    'image_url' => '',
+                    'designer_names' => array(),
+                    'foundry_name' => '',
+                    'font_style_name' => '',
+                    'font_mood_names' => array(),
+                    'font_use_case_names' => array(),
+                    'tags' => array(),
+                    'content' => '<p>Generation failed for this URL. Check the OpenAI settings or edit this draft manually.</p>',
+                    'automation_error' => $preview->get_error_message(),
+                    'diagnostics' => $this->extract_error_debug($preview),
+                );
+                continue;
+            }
+            $previews[] = $preview;
+        }
+
+        $this->set_generator_previews($previews);
+        $this->redirect_with_notice(
+            count($previews) . ' preview(s) generated. High-confidence items can be created immediately; failed items will stay here for review.',
+            'generator'
+        );
     }
 
     public function handle_create_generated_drafts() {
@@ -275,14 +319,20 @@ trait KACO_AI_Generator_Trait {
         $skipped = 0;
         $discarded = 0;
         $errors = array();
+        $remaining_manual = array();
         $remaining_automation = array();
         foreach ($previews as $preview) {
+            $source = sanitize_key((string) ($preview['preview_source'] ?? 'manual'));
             if (!empty($preview['discard'])) {
                 $discarded++;
                 continue;
             }
             if (empty($preview['create'])) {
-                $remaining_automation[] = $preview;
+                if ($source === 'automation') {
+                    $remaining_automation[] = $preview;
+                } else {
+                    $remaining_manual[] = $preview;
+                }
                 continue;
             }
 
@@ -291,17 +341,26 @@ trait KACO_AI_Generator_Trait {
                 $errors[] = $post_id->get_error_message();
                 $skipped++;
                 $preview['automation_error'] = $post_id->get_error_message();
-                $remaining_automation[] = $preview;
+                if ($source === 'automation') {
+                    $remaining_automation[] = $preview;
+                } else {
+                    $remaining_manual[] = $preview;
+                }
             } elseif ($post_id > 0) {
                 $created++;
             } else {
                 $skipped++;
-                $remaining_automation[] = $preview;
+                if ($source === 'automation') {
+                    $remaining_automation[] = $preview;
+                } else {
+                    $remaining_manual[] = $preview;
+                }
             }
         }
 
+        $this->set_generator_previews($remaining_manual);
         $this->set_generator_automation_review($remaining_automation);
-        $remaining_review = count($remaining_automation);
+        $remaining_review = count($remaining_manual) + count($remaining_automation);
         $notice = $created . ' draft(s) created';
         if ($remaining_review > 0) {
             $notice .= ', ' . $remaining_review . ' still need review';

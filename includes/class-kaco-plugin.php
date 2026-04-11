@@ -31,6 +31,7 @@ final class KACO_Plugin {
         add_action('kaco_automation_event', array($this, 'handle_automation_event'));
         add_action('admin_post_kaco_add_generator_urls_to_inbox', array($this, 'handle_add_generator_urls_to_inbox'));
         add_action('admin_post_kaco_process_generator_queue_now', array($this, 'handle_process_generator_queue_now'));
+        add_action('admin_post_kaco_generate_font_previews', array($this, 'handle_generate_font_previews'));
         add_action('admin_post_kaco_create_generated_drafts', array($this, 'handle_create_generated_drafts'));
         add_action('admin_post_kaco_retry_generator_review_item', array($this, 'handle_retry_generator_review_item'));
         add_action('admin_post_kaco_discard_generator_review_item', array($this, 'handle_discard_generator_review_item'));
@@ -110,6 +111,7 @@ final class KACO_Plugin {
         add_option('kaco_editorial_style_guide', 'Write like an editorial font reviewer. Avoid filler words such as versatile, unique touch, suitable for various projects, reliable choice, and engaging aesthetics. Use concrete visual observations and specific use cases. Do not invent technical features.');
         add_option('kaco_rewrite_mode', 'replace_body');
         add_option('kaco_generator_preview_store', array());
+        add_option('kaco_enable_manual_generator_previews', '0');
         add_option('kaco_generator_url_inbox', array());
         add_option('kaco_generator_automation_review', array());
         add_option('kaco_automation_enabled', '0');
