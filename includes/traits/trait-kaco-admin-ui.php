@@ -310,44 +310,38 @@ trait KACO_Admin_UI_Trait {
     }
 
     private function render_generator_view() {
-        $previews = $this->get_generator_previews();
         $automation_previews = $this->get_generator_automation_review();
         $inbox = $this->get_generator_url_inbox();
         $automation_enabled = get_option('kaco_automation_enabled', '0') === '1';
         $automation_process_inbox = get_option('kaco_automation_process_url_inbox', '1') === '1';
-        $manual_limit = $this->generator_manual_preview_limit();
 
         echo '<h2>Font Generator</h2>';
-        echo '<p>Generate draft-ready commercial font posts from marketplace URLs. Use Automation Queue for batches and Generate now for quick manual work.</p>';
+        echo '<p>Generate draft-ready commercial font posts from marketplace URLs through the automation queue. Add URLs, process the queue, then review or create drafts from the results.</p>';
 
         echo '<div style="display:grid;grid-template-columns:minmax(0,1fr);gap:24px;">';
         echo '<div style="background:#fff;border:1px solid #dcdcde;padding:16px;">';
         echo '<h3 style="margin-top:0;">Marketplace URLs</h3>';
-        echo '<p class="description" style="margin-top:0;">Paste URLs once, then choose whether to process them now or hand them to automation.</p>';
+        echo '<p class="description" style="margin-top:0;">Paste URLs here to add them to the queue. Queue processing is now the only generation path.</p>';
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
         wp_nonce_field(self::NONCE_ACTION);
+        echo '<input type="hidden" name="action" value="kaco_add_generator_urls_to_inbox" />';
         echo '<table class="form-table" role="presentation"><tbody>';
         echo '<tr><th scope="row"><label for="kaco_generator_urls">Marketplace URLs</label></th>';
         echo '<td><textarea id="kaco_generator_urls" name="kaco_generator_urls" rows="8" cols="100" class="large-text code" placeholder="https://www.myfonts.com/...&#10;https://creativemarket.com/..."></textarea>';
-        echo '<p class="description">One URL per line. Use <strong>Generate Draft Previews Now</strong> for up to ' . (int) $manual_limit . ' URLs. Use <strong>Add To Automation Queue</strong> for larger batches.</p></td></tr>';
+        echo '<p class="description">One URL per line. Add them to the queue, then use <strong>Process Automation Queue Now</strong> or let scheduled automation process them.</p></td></tr>';
         echo '</tbody></table>';
-        echo '<div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;">';
-        echo '<div style="background:#f6f7f7;border-left:4px solid #dba617;padding:10px 12px;flex:1 1 320px;">';
-        echo '<strong>Generate now</strong> <span style="color:#2271b1;">Recommended for 1-' . (int) $manual_limit . ' URLs</span><br/>';
-        echo 'Runs in this browser request. Strong and weak items both return here immediately for review.';
-        echo '</div>';
         if ($automation_enabled && $automation_process_inbox) {
-            echo '<div style="background:#f6f7f7;border-left:4px solid #2271b1;padding:10px 12px;flex:1 1 320px;">';
-            echo '<strong>Automation Queue</strong> <span style="color:#2271b1;">Recommended for batches</span><br/>';
+            echo '<div style="background:#f6f7f7;border-left:4px solid #2271b1;padding:10px 12px;">';
+            echo '<strong>Automation Queue</strong> <span style="color:#2271b1;">Primary workflow</span><br/>';
             echo 'Queued URLs are processed in batches. Strong items become posts automatically; weaker or failed items move to Review.';
             echo '</div>';
+        } else {
+            echo '<div style="background:#fff8e5;border-left:4px solid #dba617;padding:10px 12px;">';
+            echo '<strong>Queue processing is disabled</strong><br/>Enable automation and queue processing in Settings before adding URLs here.';
+            echo '</div>';
         }
-        echo '</div>';
         echo '<p style="margin-top:12px;">';
-        echo '<button type="submit" name="action" value="kaco_generate_font_previews" class="button button-primary">Generate Draft Previews Now</button> ';
-        if ($automation_enabled && $automation_process_inbox) {
-            echo '<button type="submit" name="action" value="kaco_add_generator_urls_to_inbox" class="button button-secondary">Add To Automation Queue</button>';
-        }
+        submit_button('Add To Automation Queue', 'primary', 'submit', false, $automation_enabled && $automation_process_inbox ? array() : array('disabled' => 'disabled'));
         echo '</p>';
         echo '</form>';
         echo '</div>';
@@ -374,26 +368,20 @@ trait KACO_Admin_UI_Trait {
         }
         echo '</div>';
 
-        if (empty($previews) && empty($automation_previews)) {
+        if (empty($automation_previews)) {
             return;
         }
 
-        echo '<h3>Review previews</h3>';
+        echo '<h3>Review queued items</h3>';
         echo '<p class="description">Successful items disappear automatically after creation. Leave <code>create draft</code> unchecked to keep an item for later, or use <code>remove from review queue</code> to discard it.</p>';
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
         wp_nonce_field(self::NONCE_ACTION);
         echo '<input type="hidden" name="action" value="kaco_create_generated_drafts" />';
 
-        $review_previews = array_merge(
-            array_map(function($item) {
-                $item['preview_source'] = 'automation';
-                return $item;
-            }, $automation_previews),
-            array_map(function($item) {
-                $item['preview_source'] = 'manual';
-                return $item;
-            }, $previews)
-        );
+        $review_previews = array_map(function($item) {
+            $item['preview_source'] = 'automation';
+            return $item;
+        }, $automation_previews);
 
         foreach ($review_previews as $index => $item) {
             $can_create = empty($item['automation_error'])
