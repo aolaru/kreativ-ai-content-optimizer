@@ -1049,11 +1049,6 @@ trait KACO_AI_Generator_Trait {
             );
         }
 
-        $tldr = $this->build_generated_tldr_block($font_name, $font_style_name, $designer_names, $foundry_name);
-        if ($tldr !== '') {
-            $parts[] = $tldr;
-        }
-
         if ($refreshed_intro !== '') {
             $parts[] = '<h2>Why you should consider ' . esc_html($font_name !== '' ? $font_name : $title) . '</h2><p>' . wp_kses_post($refreshed_intro) . '</p>';
         }
@@ -1116,34 +1111,6 @@ trait KACO_AI_Generator_Trait {
         $sentence .= '.</p>';
 
         return $sentence;
-    }
-
-    private function build_generated_tldr_block($font_name, $font_style_name, $designer_names, $foundry_name) {
-        $font_name = sanitize_text_field((string) $font_name);
-        $font_style_name = sanitize_text_field((string) $font_style_name);
-        $foundry_name = sanitize_text_field((string) $foundry_name);
-        $designer_names = array_values(array_filter(array_map('sanitize_text_field', (array) $designer_names)));
-
-        if ($font_name === '') {
-            return '';
-        }
-
-        $sentence = $font_name;
-        if ($font_style_name !== '') {
-            $sentence .= ' is a ' . $font_style_name . ' typeface';
-        } else {
-            $sentence .= ' is a commercial typeface';
-        }
-        if (!empty($designer_names)) {
-            $sentence .= ' from ' . $this->compact_designer_credit($designer_names);
-        }
-        if ($foundry_name !== '') {
-            $sentence .= !empty($designer_names) ? ', published by ' : ' from ';
-            $sentence .= $foundry_name;
-        }
-        $sentence .= '.';
-
-        return '<div style="background:#f7f7f7;padding:12px 14px;border-left:4px solid #111;font-size:14px;line-height:1.6"><strong>TL;DR</strong><br>' . esc_html($sentence) . '</div>';
     }
 
     private function build_generated_font_details_section($font_style_name, $font_mood_names, $font_use_case_names, $designer_names, $foundry_name, $verified_details, $fact_evidence) {

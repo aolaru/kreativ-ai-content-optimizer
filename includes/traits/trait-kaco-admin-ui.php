@@ -1305,7 +1305,7 @@ trait KACO_Admin_UI_Trait {
         echo '<tr><th scope="row"><label for="kaco_editorial_style_guide">Editorial style guide</label></th>';
         echo '<td><textarea id="kaco_editorial_style_guide" name="kaco_editorial_style_guide" rows="8" cols="80" class="large-text">' . esc_textarea($editorial_style_guide) . '</textarea><p class="description">Optional house rules that should shape generator and optimizer prose.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_update_template">Content update template</label></th>';
-        echo '<td><textarea id="kaco_update_template" name="kaco_update_template" rows="12" cols="80" class="large-text code">' . esc_textarea($template) . '</textarea><p class="description">Keep this aligned with the current new-font HTML structure. Use <code>{{tldr}}</code> and <code>{{font_details}}</code> for the current generator layout.</p></td></tr>';
+        echo '<td><textarea id="kaco_update_template" name="kaco_update_template" rows="12" cols="80" class="large-text code">' . esc_textarea($template) . '</textarea><p class="description">Keep this aligned with the current new-font HTML structure. Use <code>{{font_details}}</code> for the current generator layout.</p></td></tr>';
         echo '</tbody></table>';
         echo '</details>';
         echo '</td></tr>';
