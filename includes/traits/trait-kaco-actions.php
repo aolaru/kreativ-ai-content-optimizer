@@ -44,7 +44,25 @@ trait KACO_Actions_Trait {
             . (int) ($summary['created'] ?? 0) . ' created, '
             . (int) ($summary['queued_for_review'] ?? 0) . ' queued for review, '
             . (int) ($summary['remaining_inbox'] ?? 0) . ' remaining.';
+        if (!empty($summary['next_queue_run_label'])) {
+            $message .= ' Next queue pass: ' . (string) $summary['next_queue_run_label'] . '.';
+        }
         $this->redirect_with_notice($message, 'create');
+    }
+
+    public function handle_generator_queue_event() {
+        if (get_option('kaco_automation_process_url_inbox', '1') !== '1') {
+            return;
+        }
+
+        $summary = $this->process_generator_url_inbox();
+        $last_run = get_option('kaco_automation_last_run', array());
+        if (!is_array($last_run)) {
+            $last_run = array();
+        }
+        $last_run['ran_at'] = current_time('mysql', true);
+        $last_run['generator_inbox'] = $summary;
+        update_option('kaco_automation_last_run', $last_run, false);
     }
 
     public function handle_scan_hierarchy_cleanup() {

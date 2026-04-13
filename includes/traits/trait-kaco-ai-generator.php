@@ -1583,10 +1583,12 @@ trait KACO_AI_Generator_Trait {
             ));
         }
 
-        $og_image = $this->extract_meta_content($html, array('og:image', 'twitter:image'));
+        $og_image = $this->extract_meta_content($html, array('og:image', 'og:image:secure_url', 'twitter:image', 'twitter:image:src'));
         $specimen_image = '';
         if ($marketplace === 'MyFonts') {
             $specimen_image = $this->extract_myfonts_specimen_image($html);
+        } elseif ($marketplace === 'Creative Market') {
+            $specimen_image = $this->extract_creative_market_product_image($html);
         }
 
         return array(
@@ -1774,6 +1776,9 @@ trait KACO_AI_Generator_Trait {
             if (preg_match('/^\s*(.+?)\s+by\s+(.+?)(?:\s*\||\s*-\s*Creative Market|\s*$)/i', $title_blob, $matches)) {
                 $fields['font_name'] = trim((string) $matches[1]);
                 $fields['foundry_name'] = trim((string) $matches[2]);
+            } elseif (preg_match('/^\s*(.+?)\s+by\s+(.+?)(?:\s+on\s+Creative Market|\s*$)/i', $title_blob, $matches)) {
+                $fields['font_name'] = trim((string) $matches[1]);
+                $fields['foundry_name'] = trim((string) $matches[2]);
             } elseif (preg_match('/^\s*(.+?)\s*\|\s*Creative Market/i', $title_blob, $matches)) {
                 $fields['font_name'] = trim((string) $matches[1]);
             }
@@ -1787,9 +1792,21 @@ trait KACO_AI_Generator_Trait {
             if (preg_match('/by\s+([A-Z][A-Za-z0-9 .,&-]+?)(?:\s+on\s+Creative Market|\.|,|\||$)/', $text, $matches)) {
                 $fields['foundry_name'] = trim((string) $matches[1]);
             }
+            if (preg_match('/sold\s+by\s+([A-Z][A-Za-z0-9 .,&-]+?)(?:\s+on\s+Creative Market|\.|,|\||$)/i', $text, $matches)) {
+                $fields['foundry_name'] = trim((string) $matches[1]);
+            }
+            if (preg_match('/shop\s+by\s+([A-Z][A-Za-z0-9 .,&-]+?)(?:\s+on\s+Creative Market|\.|,|\||$)/i', $text, $matches)) {
+                $fields['foundry_name'] = trim((string) $matches[1]);
+            }
             if (preg_match('/designed by\s+([^.;|]+?)(?:\s+and\s+published by|\s+published by|[.;|]|$)/i', $text, $matches)) {
                 $fields['designer_names'] = $this->sanitize_name_list($matches[1]);
                 $fields['designer_evidence'] = 'Designed by ' . trim((string) $matches[1]);
+            } elseif (preg_match('/created by\s+([^.;|]+?)(?:\s+for\s+Creative Market|[.;|]|$)/i', $text, $matches)) {
+                $fields['designer_names'] = $this->sanitize_name_list($matches[1]);
+                $fields['designer_evidence'] = 'Created by ' . trim((string) $matches[1]);
+            } elseif (preg_match('/designer\s*:\s*([^.;|]+?)(?:\s+shop\s*:|\s+seller\s*:|[.;|]|$)/i', $text, $matches)) {
+                $fields['designer_names'] = $this->sanitize_name_list($matches[1]);
+                $fields['designer_evidence'] = 'Designer: ' . trim((string) $matches[1]);
             }
         }
 
@@ -1855,6 +1872,95 @@ trait KACO_AI_Generator_Trait {
         }
 
         return '';
+    }
+
+    private function normalize_creative_market_image_url($url) {
+        $url = html_entity_decode((string) $url, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $url = str_replace('\/', '/', $url);
+        $url = esc_url_raw($url);
+        if ($url === '') {
+            return '';
+        }
+
+        $parts = wp_parse_url($url);
+        if (empty($parts['scheme']) || empty($parts['host'])) {
+            return '';
+        }
+
+        $normalized = (string) $parts['scheme'] . '://' . $parts['host'] . (string) ($parts['path'] ?? '');
+        if (!empty($parts['query'])) {
+            $normalized .= '?' . $parts['query'];
+        }
+
+        return esc_url_raw($normalized);
+    }
+
+    private function creative_market_image_score($url) {
+        $url = strtolower((string) $url);
+        if ($url === '') {
+            return -100;
+        }
+
+        $score = 0;
+        if (strpos($url, 'images.creativemarket.com') !== false) {
+            $score += 6;
+        }
+        if (preg_match('/\.(?:jpg|jpeg|png|webp)(?:\?|$)/i', $url)) {
+            $score += 3;
+        }
+        if (strpos($url, '/products/') !== false || strpos($url, 'product-image') !== false || strpos($url, 'product_preview') !== false) {
+            $score += 4;
+        }
+        if (strpos($url, 'preview') !== false || strpos($url, 'display') !== false || strpos($url, 'hero') !== false) {
+            $score += 2;
+        }
+        if (strpos($url, 'avatar') !== false || strpos($url, 'profile') !== false || strpos($url, 'shop-icon') !== false || strpos($url, 'logo') !== false || strpos($url, 'icon') !== false) {
+            $score -= 6;
+        }
+
+        return $score;
+    }
+
+    private function extract_creative_market_product_image($html) {
+        $html = (string) $html;
+        if ($html === '') {
+            return '';
+        }
+
+        $candidates = array();
+        $patterns = array(
+            '#https://images\.creativemarket\.com/[^"\']+\.(?:jpg|jpeg|png|webp)(?:\?[^"\']*)?#i',
+            '#https://[^"\']*creativemarket[^"\']+\.(?:jpg|jpeg|png|webp)(?:\?[^"\']*)?#i',
+        );
+
+        foreach ($patterns as $pattern) {
+            if (preg_match_all($pattern, $html, $matches)) {
+                foreach ((array) ($matches[0] ?? array()) as $candidate) {
+                    $candidate = $this->normalize_creative_market_image_url((string) $candidate);
+                    if ($candidate !== '') {
+                        $candidates[] = $candidate;
+                    }
+                }
+            }
+        }
+
+        foreach ((array) $candidates as $candidate) {
+            if ($this->creative_market_image_score($candidate) >= 8) {
+                return $candidate;
+            }
+        }
+
+        $best = '';
+        $best_score = -100;
+        foreach ((array) array_unique($candidates) as $candidate) {
+            $score = $this->creative_market_image_score($candidate);
+            if ($score > $best_score) {
+                $best = $candidate;
+                $best_score = $score;
+            }
+        }
+
+        return $best_score >= 3 ? $best : '';
     }
 
     private function extract_meta_content($html, $names) {
@@ -1974,6 +2080,35 @@ trait KACO_AI_Generator_Trait {
         update_option('kaco_generator_automation_review', is_array($items) ? array_values($items) : array(), false);
     }
 
+    private function get_generator_queue_urls_per_run() {
+        return min(25, max(1, (int) get_option('kaco_automation_queue_urls_per_run', 1)));
+    }
+
+    private function get_generator_queue_delay_minutes() {
+        return min(240, max(1, (int) get_option('kaco_automation_queue_delay_minutes', 10)));
+    }
+
+    private function schedule_generator_queue_followup($delay_minutes = null) {
+        $delay_minutes = $delay_minutes === null ? $this->get_generator_queue_delay_minutes() : min(240, max(1, (int) $delay_minutes));
+        $target_timestamp = time() + ($delay_minutes * MINUTE_IN_SECONDS);
+        $scheduled = wp_next_scheduled('kaco_generator_queue_event');
+
+        if ($scheduled && $scheduled <= $target_timestamp) {
+            return $scheduled;
+        }
+
+        if ($scheduled) {
+            wp_clear_scheduled_hook('kaco_generator_queue_event');
+        }
+
+        wp_schedule_single_event($target_timestamp, 'kaco_generator_queue_event');
+        return $target_timestamp;
+    }
+
+    private function clear_generator_queue_followup() {
+        wp_clear_scheduled_hook('kaco_generator_queue_event');
+    }
+
     private function process_generator_url_inbox() {
         if (get_option('kaco_automation_process_url_inbox', '1') !== '1') {
             return array(
@@ -1988,6 +2123,8 @@ trait KACO_AI_Generator_Trait {
 
         $inbox = $this->get_generator_url_inbox();
         $batch_size = min(100, max(1, (int) get_option('kaco_automation_url_batch_size', 10)));
+        $urls_per_run = min($batch_size, $this->get_generator_queue_urls_per_run());
+        $queue_delay_minutes = $this->get_generator_queue_delay_minutes();
         $auto_create = get_option('kaco_automation_auto_create_drafts', '1') === '1';
         $auto_schedule = get_option('kaco_automation_auto_schedule_generated_posts', '1') === '1';
         $create_confidence = min(1, max(0, (float) get_option('kaco_automation_generator_create_confidence', 0.90)));
@@ -2001,7 +2138,7 @@ trait KACO_AI_Generator_Trait {
         $remaining = array();
 
         foreach ($inbox as $url) {
-            if ($processed >= $batch_size) {
+            if ($processed >= $urls_per_run) {
                 $remaining[] = $url;
                 continue;
             }
@@ -2089,6 +2226,13 @@ trait KACO_AI_Generator_Trait {
         $this->set_generator_url_inbox($remaining);
         $this->set_generator_automation_review($review_items);
 
+        $next_queue_run = 0;
+        if (!empty($remaining) && get_option('kaco_automation_enabled', '0') === '1' && get_option('kaco_automation_process_url_inbox', '1') === '1') {
+            $next_queue_run = (int) $this->schedule_generator_queue_followup($queue_delay_minutes);
+        } else {
+            $this->clear_generator_queue_followup();
+        }
+
         return array(
             'processed' => $processed,
             'created' => $created,
@@ -2096,6 +2240,10 @@ trait KACO_AI_Generator_Trait {
             'skipped_duplicates' => $skipped_duplicates,
             'failed' => $failed,
             'remaining_inbox' => count($remaining),
+            'urls_per_run' => $urls_per_run,
+            'queue_delay_minutes' => $queue_delay_minutes,
+            'next_queue_run_gmt' => $next_queue_run > 0 ? gmdate('Y-m-d H:i:s', $next_queue_run) : '',
+            'next_queue_run_label' => $next_queue_run > 0 ? get_date_from_gmt(gmdate('Y-m-d H:i:s', $next_queue_run), 'Y-m-d H:i') : '',
         );
     }
 

@@ -29,6 +29,7 @@ final class KACO_Plugin {
         register_deactivation_hook($this->plugin_file, array($this, 'deactivate'));
         add_action('admin_menu', array($this, 'register_admin_menu'));
         add_action('kaco_automation_event', array($this, 'handle_automation_event'));
+        add_action('kaco_generator_queue_event', array($this, 'handle_generator_queue_event'));
         add_action('admin_post_kaco_add_generator_urls_to_inbox', array($this, 'handle_add_generator_urls_to_inbox'));
         add_action('admin_post_kaco_process_generator_queue_now', array($this, 'handle_process_generator_queue_now'));
         add_action('admin_post_kaco_generate_font_previews', array($this, 'handle_generate_font_previews'));
@@ -127,6 +128,8 @@ final class KACO_Plugin {
         add_option('kaco_automation_apply_confidence', '0.93');
         add_option('kaco_automation_process_url_inbox', '1');
         add_option('kaco_automation_url_batch_size', '10');
+        add_option('kaco_automation_queue_urls_per_run', '1');
+        add_option('kaco_automation_queue_delay_minutes', '10');
         add_option('kaco_automation_auto_create_drafts', '1');
         add_option('kaco_automation_generator_create_confidence', '0.90');
         add_option('kaco_automation_auto_schedule_generated_posts', '1');
@@ -223,6 +226,7 @@ final class KACO_Plugin {
 
     private function clear_automation_schedule() {
         wp_clear_scheduled_hook('kaco_automation_event');
+        wp_clear_scheduled_hook('kaco_generator_queue_event');
     }
 
     private function legacy_update_template() {

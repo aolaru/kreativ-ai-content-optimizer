@@ -315,8 +315,12 @@ trait KACO_Admin_UI_Trait {
         $inbox = $this->get_generator_url_inbox();
         $automation_enabled = get_option('kaco_automation_enabled', '0') === '1';
         $automation_process_inbox = get_option('kaco_automation_process_url_inbox', '1') === '1';
+        $queue_urls_per_run = min(25, max(1, (int) get_option('kaco_automation_queue_urls_per_run', 1)));
+        $queue_delay_minutes = min(240, max(1, (int) get_option('kaco_automation_queue_delay_minutes', 10)));
         $manual_previews_enabled = get_option('kaco_enable_manual_generator_previews', '0') === '1';
         $manual_limit = $this->generator_manual_preview_limit();
+        $last_run = get_option('kaco_automation_last_run', array());
+        $last_queue_summary = !empty($last_run['generator_inbox']) && is_array($last_run['generator_inbox']) ? (array) $last_run['generator_inbox'] : array();
 
         echo '<h2>Font Generator</h2>';
         echo '<p>Generate draft-ready commercial font posts from marketplace URLs through the automation queue. Add URLs, process the queue, then review or create drafts from the results.</p>';
@@ -341,7 +345,7 @@ trait KACO_Admin_UI_Trait {
         if ($automation_enabled && $automation_process_inbox) {
             echo '<div style="background:#f6f7f7;border-left:4px solid #2271b1;padding:10px 12px;">';
             echo '<strong>Automation Queue</strong> <span style="color:#2271b1;">Primary workflow</span><br/>';
-            echo 'Queued URLs are processed in batches. Strong items become posts automatically; weaker or failed items move to Review.';
+            echo 'Queued URLs are processed in paced runs. This install is currently set to <strong>' . (int) $queue_urls_per_run . ' URL(s)</strong> per pass with a <strong>' . (int) $queue_delay_minutes . '-minute</strong> delay between follow-up runs. Strong items become posts automatically; weaker or failed items move to Review.';
             echo '</div>';
         } else {
             echo '<div style="background:#fff8e5;border-left:4px solid #dba617;padding:10px 12px;">';
@@ -367,6 +371,9 @@ trait KACO_Admin_UI_Trait {
                     echo ' ...';
                 }
             }
+            if (!empty($last_queue_summary['next_queue_run_label'])) {
+                echo '<br/><strong>Next queued pass:</strong> ' . esc_html((string) $last_queue_summary['next_queue_run_label']);
+            }
             echo '</p>';
 
             echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin-top:12px;">';
@@ -374,7 +381,7 @@ trait KACO_Admin_UI_Trait {
             echo '<input type="hidden" name="action" value="kaco_process_generator_queue_now" />';
             submit_button('Process Automation Queue Now', 'secondary', 'submit', false);
             echo '</form>';
-            echo '<p class="description">Use this when you want the queue processed immediately instead of waiting for WP-Cron. After processing, items leave the queue and either become posts or move to Review.</p>';
+            echo '<p class="description">Use this when you want the queue processed immediately instead of waiting for WP-Cron. Each run processes only the configured queue slice, then schedules the next follow-up run if URLs remain.</p>';
             echo '</div>';
         }
         echo '</div>';
@@ -1241,6 +1248,8 @@ trait KACO_Admin_UI_Trait {
         $automation_apply_confidence = (string) get_option('kaco_automation_apply_confidence', '0.93');
         $automation_process_url_inbox = (string) get_option('kaco_automation_process_url_inbox', '1');
         $automation_url_batch_size = (int) get_option('kaco_automation_url_batch_size', 10);
+        $automation_queue_urls_per_run = (int) get_option('kaco_automation_queue_urls_per_run', 1);
+        $automation_queue_delay_minutes = (int) get_option('kaco_automation_queue_delay_minutes', 10);
         $automation_auto_create_drafts = (string) get_option('kaco_automation_auto_create_drafts', '1');
         $automation_generator_create_confidence = (string) get_option('kaco_automation_generator_create_confidence', '0.90');
         $automation_auto_schedule_generated_posts = (string) get_option('kaco_automation_auto_schedule_generated_posts', '1');
@@ -1367,6 +1376,10 @@ trait KACO_Admin_UI_Trait {
         echo '<td><label><input type="checkbox" id="kaco_automation_process_url_inbox" name="kaco_automation_process_url_inbox" value="1" ' . checked('1', $automation_process_url_inbox, false) . ' /> yes</label><p class="description">Processes the Create lane\'s Automation Queue during scheduled runs.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_automation_url_batch_size">Automation URL batch size</label></th>';
         echo '<td><input type="number" min="1" max="100" id="kaco_automation_url_batch_size" name="kaco_automation_url_batch_size" value="' . (int) $automation_url_batch_size . '" /><p class="description">Keep this modest if your host times out on marketplace fetches or multiple AI calls.</p></td></tr>';
+        echo '<tr><th scope="row"><label for="kaco_automation_queue_urls_per_run">Queue URLs per run</label></th>';
+        echo '<td><input type="number" min="1" max="25" id="kaco_automation_queue_urls_per_run" name="kaco_automation_queue_urls_per_run" value="' . (int) $automation_queue_urls_per_run . '" /><p class="description">Recommended: <code>1</code>. The queue processes only this many URLs per pass, then waits for the next follow-up run.</p></td></tr>';
+        echo '<tr><th scope="row"><label for="kaco_automation_queue_delay_minutes">Queue delay (minutes)</label></th>';
+        echo '<td><input type="number" min="1" max="240" id="kaco_automation_queue_delay_minutes" name="kaco_automation_queue_delay_minutes" value="' . (int) $automation_queue_delay_minutes . '" /><p class="description">Recommended: <code>10</code>. Remaining URLs are picked up by a dedicated queue event after this delay instead of being processed back-to-back.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_automation_auto_create_drafts">Automation auto-create posts</label></th>';
         echo '<td><label><input type="checkbox" id="kaco_automation_auto_create_drafts" name="kaco_automation_auto_create_drafts" value="1" ' . checked('1', $automation_auto_create_drafts, false) . ' /> yes</label><p class="description">High-confidence generator previews become posts automatically. Lower-confidence items stay in Review.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_automation_generator_create_confidence">Generator auto-create confidence</label></th>';
@@ -1485,6 +1498,8 @@ trait KACO_Admin_UI_Trait {
         update_option('kaco_automation_apply_confidence', min(1, max(0, (float) ($_POST['kaco_automation_apply_confidence'] ?? 0.93))));
         update_option('kaco_automation_process_url_inbox', !empty($_POST['kaco_automation_process_url_inbox']) ? '1' : '0');
         update_option('kaco_automation_url_batch_size', min(100, max(1, (int) ($_POST['kaco_automation_url_batch_size'] ?? 10))));
+        update_option('kaco_automation_queue_urls_per_run', min(25, max(1, (int) ($_POST['kaco_automation_queue_urls_per_run'] ?? 1))));
+        update_option('kaco_automation_queue_delay_minutes', min(240, max(1, (int) ($_POST['kaco_automation_queue_delay_minutes'] ?? 10))));
         update_option('kaco_automation_auto_create_drafts', !empty($_POST['kaco_automation_auto_create_drafts']) ? '1' : '0');
         update_option('kaco_automation_generator_create_confidence', min(1, max(0, (float) ($_POST['kaco_automation_generator_create_confidence'] ?? 0.90))));
         update_option('kaco_automation_auto_schedule_generated_posts', !empty($_POST['kaco_automation_auto_schedule_generated_posts']) ? '1' : '0');
