@@ -13,7 +13,7 @@ final class KACO_Plugin {
     use KACO_Content_Trait;
     use KACO_Taxonomy_Tags_Trait;
 
-    const VERSION = '1.0.0';
+    const VERSION = '1.0.1';
     const TABLE = 'kaco_suggestions';
     const NONCE_ACTION = 'kaco_admin_action';
     const OPENAI_ENDPOINT = 'https://api.openai.com/v1/responses';
