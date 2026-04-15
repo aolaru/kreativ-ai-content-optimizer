@@ -1,10 +1,6 @@
 <?php
 
 trait KACO_AI_Generator_Trait {
-    private function generator_manual_preview_limit() {
-        return 1;
-    }
-
     private function diagnostics_enabled() {
         return get_option('kaco_debug_mode', '0') === '1';
     }
@@ -28,12 +24,12 @@ trait KACO_AI_Generator_Trait {
         $queue_key = (int) ($_POST['queue_key'] ?? -1);
         $items = $this->get_generator_automation_review();
         if (!isset($items[$queue_key])) {
-            $this->redirect_with_notice('Generator review item not found.', 'review');
+            $this->redirect_with_notice('New-font review item not found.', 'create');
         }
 
         $url = esc_url_raw((string) ($items[$queue_key]['url'] ?? ''));
         if ($url === '') {
-            $this->redirect_with_notice('Generator review item is missing a source URL.', 'review');
+            $this->redirect_with_notice('New-font review item is missing a source URL.', 'create');
         }
 
         $preview = $this->request_generator_preview($url);
@@ -41,13 +37,13 @@ trait KACO_AI_Generator_Trait {
             $items[$queue_key]['automation_error'] = $preview->get_error_message();
             $items[$queue_key]['diagnostics'] = $this->extract_error_debug($preview);
             $this->set_generator_automation_review($items);
-            $this->redirect_with_notice('Generator preview retry failed: ' . $preview->get_error_message(), 'review');
+            $this->redirect_with_notice('New-font retry failed: ' . $preview->get_error_message(), 'create');
         }
 
         $preview['preview_source'] = 'automation';
         $items[$queue_key] = $preview;
         $this->set_generator_automation_review($items);
-        $this->redirect_with_notice('Generator review item retried successfully.', 'review');
+        $this->redirect_with_notice('New-font review item retried successfully.', 'create');
     }
 
     public function handle_discard_generator_review_item() {
@@ -55,12 +51,12 @@ trait KACO_AI_Generator_Trait {
         $queue_key = (int) ($_POST['queue_key'] ?? -1);
         $items = $this->get_generator_automation_review();
         if (!isset($items[$queue_key])) {
-            $this->redirect_with_notice('Generator review item not found.', 'review');
+            $this->redirect_with_notice('New-font review item not found.', 'create');
         }
 
         unset($items[$queue_key]);
         $this->set_generator_automation_review(array_values($items));
-        $this->redirect_with_notice('Generator review item removed.', 'review');
+        $this->redirect_with_notice('New-font review item removed.', 'create');
     }
 
     public function handle_create_generator_review_item() {
@@ -68,7 +64,7 @@ trait KACO_AI_Generator_Trait {
         $queue_key = (int) ($_POST['queue_key'] ?? -1);
         $items = $this->get_generator_automation_review();
         if (!isset($items[$queue_key])) {
-            $this->redirect_with_notice('Generator review item not found.', 'review');
+            $this->redirect_with_notice('New-font review item not found.', 'create');
         }
 
         $post_id = $this->create_generated_draft_from_preview($items[$queue_key]);
@@ -76,12 +72,12 @@ trait KACO_AI_Generator_Trait {
             $items[$queue_key]['automation_error'] = is_wp_error($post_id) ? $post_id->get_error_message() : 'Draft creation failed.';
             $this->set_generator_automation_review($items);
             $message = is_wp_error($post_id) ? $post_id->get_error_message() : 'Draft creation failed.';
-            $this->redirect_with_notice('Generator review item could not be created: ' . $message, 'review');
+            $this->redirect_with_notice('New-font review item could not be created: ' . $message, 'create');
         }
 
         unset($items[$queue_key]);
         $this->set_generator_automation_review(array_values($items));
-        $this->redirect_with_notice('Generator review item created successfully.', 'review');
+        $this->redirect_with_notice('New-font review item created successfully.', 'create');
     }
 
     public function handle_add_generator_urls_to_inbox() {
@@ -93,7 +89,7 @@ trait KACO_AI_Generator_Trait {
         }
         $urls = $this->normalize_generator_urls($raw_urls);
         if (empty($urls)) {
-            $this->redirect_with_notice('No marketplace URLs were provided for the inbox.', 'generator');
+            $this->redirect_with_notice('No marketplace URLs were provided for the new-font queue.', 'create');
         }
 
         $inbox = $this->get_generator_url_inbox();
@@ -108,7 +104,7 @@ trait KACO_AI_Generator_Trait {
             $added++;
         }
         $this->set_generator_url_inbox($inbox);
-        $this->redirect_with_notice($added . ' URL(s) added to the generator inbox.', 'generator');
+        $this->redirect_with_notice($added . ' URL(s) added to the new-font queue.', 'create');
     }
 
     private function generate_ai_for_row($row) {
@@ -258,55 +254,6 @@ trait KACO_AI_Generator_Trait {
         return $this->sanitize_ai_payload($decoded);
     }
 
-    public function handle_generate_font_previews() {
-        $this->require_admin_request();
-        if (get_option('kaco_enable_manual_generator_previews', '0') !== '1') {
-            $this->redirect_with_notice('Manual preview generation is disabled. Add URLs to the Automation Queue instead.', 'generator');
-        }
-
-        $urls = $this->normalize_generator_urls((string) wp_unslash($_POST['kaco_generator_urls'] ?? ''));
-        if (empty($urls)) {
-            $this->redirect_with_notice('No marketplace URLs were provided.', 'generator');
-        }
-
-        $manual_limit = $this->generator_manual_preview_limit();
-        if (count($urls) > $manual_limit) {
-            $this->redirect_with_notice(
-                'Generate now accepts up to ' . $manual_limit . ' URL(s) at a time. Use Automation Queue for larger batches.',
-                'generator'
-            );
-        }
-
-        $previews = array();
-        foreach ($urls as $url) {
-            $preview = $this->request_generator_preview($url, 'fast');
-            if (is_wp_error($preview)) {
-                $previews[] = array(
-                    'url' => esc_url_raw($url),
-                    'title' => '',
-                    'image_url' => '',
-                    'designer_names' => array(),
-                    'foundry_name' => '',
-                    'font_style_name' => '',
-                    'font_mood_names' => array(),
-                    'font_use_case_names' => array(),
-                    'tags' => array(),
-                    'content' => '<p>Generation failed for this URL. Check the OpenAI settings or edit this draft manually.</p>',
-                    'automation_error' => $preview->get_error_message(),
-                    'diagnostics' => $this->extract_error_debug($preview),
-                );
-                continue;
-            }
-            $previews[] = $preview;
-        }
-
-        $this->set_generator_previews($previews);
-        $this->redirect_with_notice(
-            count($previews) . ' preview(s) generated. High-confidence items can be created immediately; failed items will stay here for review.',
-            'generator'
-        );
-    }
-
     public function handle_create_generated_drafts() {
         $this->require_admin_request();
 
@@ -319,20 +266,14 @@ trait KACO_AI_Generator_Trait {
         $skipped = 0;
         $discarded = 0;
         $errors = array();
-        $remaining_manual = array();
         $remaining_automation = array();
         foreach ($previews as $preview) {
-            $source = sanitize_key((string) ($preview['preview_source'] ?? 'manual'));
             if (!empty($preview['discard'])) {
                 $discarded++;
                 continue;
             }
             if (empty($preview['create'])) {
-                if ($source === 'automation') {
-                    $remaining_automation[] = $preview;
-                } else {
-                    $remaining_manual[] = $preview;
-                }
+                $remaining_automation[] = $preview;
                 continue;
             }
 
@@ -341,26 +282,17 @@ trait KACO_AI_Generator_Trait {
                 $errors[] = $post_id->get_error_message();
                 $skipped++;
                 $preview['automation_error'] = $post_id->get_error_message();
-                if ($source === 'automation') {
-                    $remaining_automation[] = $preview;
-                } else {
-                    $remaining_manual[] = $preview;
-                }
+                $remaining_automation[] = $preview;
             } elseif ($post_id > 0) {
                 $created++;
             } else {
                 $skipped++;
-                if ($source === 'automation') {
-                    $remaining_automation[] = $preview;
-                } else {
-                    $remaining_manual[] = $preview;
-                }
+                $remaining_automation[] = $preview;
             }
         }
 
-        $this->set_generator_previews($remaining_manual);
         $this->set_generator_automation_review($remaining_automation);
-        $remaining_review = count($remaining_manual) + count($remaining_automation);
+        $remaining_review = count($remaining_automation);
         $notice = $created . ' draft(s) created';
         if ($remaining_review > 0) {
             $notice .= ', ' . $remaining_review . ' still need review';
@@ -2038,28 +1970,6 @@ trait KACO_AI_Generator_Trait {
             return trim((string) $matches[1]);
         }
         return '';
-    }
-
-    private function get_generator_previews() {
-        $store = get_option('kaco_generator_preview_store', array());
-        if (!is_array($store)) {
-            return array();
-        }
-
-        $user_id = (int) get_current_user_id();
-        $previews = $store[$user_id] ?? array();
-        return is_array($previews) ? $previews : array();
-    }
-
-    private function set_generator_previews($previews) {
-        $store = get_option('kaco_generator_preview_store', array());
-        if (!is_array($store)) {
-            $store = array();
-        }
-
-        $user_id = (int) get_current_user_id();
-        $store[$user_id] = is_array($previews) ? array_values($previews) : array();
-        update_option('kaco_generator_preview_store', $store, false);
     }
 
     private function get_generator_url_inbox() {

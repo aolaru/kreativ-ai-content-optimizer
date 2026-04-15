@@ -40,30 +40,30 @@ trait KACO_Admin_UI_Trait {
         echo '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin:20px 0;">';
         $this->render_primary_action_card(
             'Add New Fonts',
-            'Use Create when you have marketplace URLs. Batches belong in Automation Queue; Generate now is safest for a single URL.',
-            'Open Create',
+            'Use New Fonts when you have marketplace URLs. Add them to the queue, process the queue, then review or create posts.',
+            'Open New Fonts',
             admin_url('admin.php?page=kaco-dashboard&view=create')
         );
         $this->render_primary_action_card(
-            'Review Exceptions',
-            'Use Review when automation was uncertain, failed, or left approved items waiting for a final apply decision.',
-            'Open Review',
+            'Review Problems',
+            'Use Problems when refresh suggestions need review or automation failures need investigation.',
+            'Open Problems',
             admin_url('admin.php?page=kaco-dashboard&view=review')
         );
         $this->render_primary_action_card(
             'Run Refresh',
-            'Use Refresh to scan older posts and create improvement suggestions. It does not rewrite content immediately.',
-            'Open Refresh',
+            'Use Refresh Existing to scan older posts and create improvement suggestions. It does not rewrite content immediately.',
+            'Open Refresh Existing',
             admin_url('admin.php?page=kaco-dashboard&view=refresh')
         );
         echo '</div>';
 
         echo '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:20px 0;">';
-        $this->render_dashboard_card('Create', 'URL inbox waiting', (string) $url_inbox, 'Open Create', admin_url('admin.php?page=kaco-dashboard&view=create'));
-        $this->render_dashboard_card('Review', 'Generator exceptions', (string) $generator_review, 'Open Review', admin_url('admin.php?page=kaco-dashboard&view=review'));
-        $this->render_dashboard_card('Review', 'Suggestions needing review', (string) $needs_review, 'Open Review', admin_url('admin.php?page=kaco-dashboard&view=review'));
-        $this->render_dashboard_card('Review', 'Approved and ready to apply', (string) $approved, 'Open Review', admin_url('admin.php?page=kaco-dashboard&view=review'));
-        $this->render_dashboard_card('Refresh', 'Pending suggestions', (string) $pending, 'Open Refresh', admin_url('admin.php?page=kaco-dashboard&view=refresh'));
+        $this->render_dashboard_card('New Fonts', 'Queue waiting', (string) $url_inbox, 'Open New Fonts', admin_url('admin.php?page=kaco-dashboard&view=create'));
+        $this->render_dashboard_card('New Fonts', 'Needs review', (string) $generator_review, 'Open New Fonts', admin_url('admin.php?page=kaco-dashboard&view=create'));
+        $this->render_dashboard_card('Problems', 'Suggestions needing review', (string) $needs_review, 'Open Problems', admin_url('admin.php?page=kaco-dashboard&view=review'));
+        $this->render_dashboard_card('Problems', 'Approved and ready to apply', (string) $approved, 'Open Problems', admin_url('admin.php?page=kaco-dashboard&view=review'));
+        $this->render_dashboard_card('Refresh Existing', 'Pending suggestions', (string) $pending, 'Open Refresh Existing', admin_url('admin.php?page=kaco-dashboard&view=refresh'));
         $this->render_dashboard_card('Taxonomy', 'Hierarchy cleanup rows', (string) $cleanup_rows, 'Open Taxonomy', admin_url('admin.php?page=kaco-dashboard&view=taxonomy'));
         echo '</div>';
 
@@ -71,7 +71,7 @@ trait KACO_Admin_UI_Trait {
         echo '<ul>';
         echo '<li><strong>New posts:</strong> ' . (int) $url_inbox . ' URL(s) waiting, ' . (int) $generator_review . ' generator review item(s).</li>';
         echo '<li><strong>Existing posts:</strong> ' . (int) $pending . ' pending, ' . (int) $needs_review . ' needs review, ' . (int) $approved . ' approved, ' . (int) $applied . ' applied.</li>';
-        echo '<li><strong>Automation:</strong> ' . (int) $failed_logs . ' recent failure/review log item(s).</li>';
+        echo '<li><strong>Automation:</strong> ' . (int) $failed_logs . ' recent problem log item(s).</li>';
         echo '<li><strong>Taxonomy:</strong> ' . (int) $cleanup_rows . ' hierarchy cleanup row(s) in the latest scan.</li>';
         echo '</ul>';
 
@@ -121,7 +121,7 @@ trait KACO_Admin_UI_Trait {
 
     private function render_refresh_view() {
         echo '<h2>Refresh existing posts</h2>';
-        echo '<p>Use this lane for older content. First run audits, then review or apply queued suggestions. Automation status is shown below so you can see whether the queue is moving without manual intervention.</p>';
+        echo '<p>Use this lane for older content. Run audits, generate suggestions, then resolve or apply them. Automation status is shown below so you can see whether refresh work is moving without manual intervention.</p>';
         $this->render_audit_view();
 
         $automation_last_run = get_option('kaco_automation_last_run', array());
@@ -141,7 +141,7 @@ trait KACO_Admin_UI_Trait {
             }
             echo '</p>';
         }
-        echo '<p><a href="' . esc_url(admin_url('admin.php?page=kaco-dashboard&view=review')) . '">Open Review</a></p>';
+        echo '<p><a href="' . esc_url(admin_url('admin.php?page=kaco-dashboard&view=review')) . '">Open Problems</a></p>';
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin-top:12px;">';
         wp_nonce_field(self::NONCE_ACTION);
         echo '<input type="hidden" name="action" value="kaco_run_refresh_automation_now" />';
@@ -156,18 +156,16 @@ trait KACO_Admin_UI_Trait {
         $review_filter = isset($_GET['review_filter']) ? sanitize_key((string) $_GET['review_filter']) : 'all';
         $needs_review_count = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table} WHERE status = 'needs_review'");
         $approved_count = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table} WHERE status = 'approved'");
-        $generator_count = count($this->get_generator_automation_review());
         $failed_logs_count = count(array_filter((array) $this->get_automation_logs(), function($item) {
             return (string) ($item['status'] ?? '') === 'failed';
         }));
 
-        echo '<h2>Review inbox</h2>';
-        echo '<p>This lane is for triage. Work top to bottom: handle items that need review, then apply approved suggestions, then inspect failures if something looks wrong.</p>';
+        echo '<h2>Problems</h2>';
+        echo '<p>This lane is for old-post triage and operational failures. Handle items that need review, apply approved suggestions, then inspect failures if something looks wrong.</p>';
 
         echo '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:18px 0;">';
         $this->render_dashboard_card('Needs review', 'Old-post suggestions', (string) $needs_review_count, 'Open section', admin_url('admin.php?page=kaco-dashboard&view=review&review_filter=needs_review'));
         $this->render_dashboard_card('Ready to apply', 'Approved suggestions', (string) $approved_count, 'Open section', admin_url('admin.php?page=kaco-dashboard&view=review&review_filter=approved'));
-        $this->render_dashboard_card('Generator', 'Queued previews', (string) $generator_count, 'Open section', admin_url('admin.php?page=kaco-dashboard&view=review&review_filter=generator'));
         $this->render_dashboard_card('Failures', 'Automation failures', (string) $failed_logs_count, 'Open section', admin_url('admin.php?page=kaco-dashboard&view=review&review_filter=failed'));
         echo '</div>';
 
@@ -176,7 +174,6 @@ trait KACO_Admin_UI_Trait {
             'all' => 'All',
             'needs_review' => 'Needs Review (' . $needs_review_count . ')',
             'approved' => 'Ready To Apply (' . $approved_count . ')',
-            'generator' => 'Generator (' . $generator_count . ')',
             'failed' => 'Failures (' . $failed_logs_count . ')',
         ) as $key => $label) {
             $url = admin_url('admin.php?page=kaco-dashboard&view=review&review_filter=' . $key);
@@ -310,42 +307,33 @@ trait KACO_Admin_UI_Trait {
     }
 
     private function render_generator_view() {
-        $previews = $this->get_generator_previews();
         $automation_previews = $this->get_generator_automation_review();
         $inbox = $this->get_generator_url_inbox();
         $automation_enabled = get_option('kaco_automation_enabled', '0') === '1';
         $automation_process_inbox = get_option('kaco_automation_process_url_inbox', '1') === '1';
         $queue_urls_per_run = min(25, max(1, (int) get_option('kaco_automation_queue_urls_per_run', 1)));
         $queue_delay_minutes = min(240, max(1, (int) get_option('kaco_automation_queue_delay_minutes', 10)));
-        $manual_previews_enabled = get_option('kaco_enable_manual_generator_previews', '0') === '1';
-        $manual_limit = $this->generator_manual_preview_limit();
         $last_run = get_option('kaco_automation_last_run', array());
         $last_queue_summary = !empty($last_run['generator_inbox']) && is_array($last_run['generator_inbox']) ? (array) $last_run['generator_inbox'] : array();
 
-        echo '<h2>Font Generator</h2>';
-        echo '<p>Generate draft-ready commercial font posts from marketplace URLs through the automation queue. Add URLs, process the queue, then review or create drafts from the results.</p>';
+        echo '<h2>New Fonts</h2>';
+        echo '<p>Add marketplace URLs to the new-font queue, process the queue in paced runs, then review or create posts from the results.</p>';
 
         echo '<div style="display:grid;grid-template-columns:minmax(0,1fr);gap:24px;">';
         echo '<div style="background:#fff;border:1px solid #dcdcde;padding:16px;">';
         echo '<h3 style="margin-top:0;">Marketplace URLs</h3>';
-        echo '<p class="description" style="margin-top:0;">Paste URLs here to add them to the queue.' . ($manual_previews_enabled ? ' Manual preview generation is also available.' : ' Queue processing is the default generation path.') . '</p>';
+        echo '<p class="description" style="margin-top:0;">Paste marketplace URLs here to add them to the queue. The queue is the only generation path for new posts.</p>';
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
         wp_nonce_field(self::NONCE_ACTION);
         echo '<table class="form-table" role="presentation"><tbody>';
         echo '<tr><th scope="row"><label for="kaco_generator_urls">Marketplace URLs</label></th>';
         echo '<td><textarea id="kaco_generator_urls" name="kaco_generator_urls" rows="8" cols="100" class="large-text code" placeholder="https://www.myfonts.com/...&#10;https://creativemarket.com/..."></textarea>';
-        echo '<p class="description">One URL per line. Add them to the queue, then use <strong>Process Automation Queue Now</strong> or let scheduled automation process them.' . ($manual_previews_enabled ? ' Manual preview generation is limited to up to ' . (int) $manual_limit . ' URL(s) at a time.' : '') . '</p></td></tr>';
+        echo '<p class="description">One URL per line. Add them to the queue, then use <strong>Process Queue Now</strong> or let scheduled automation process them.</p></td></tr>';
         echo '</tbody></table>';
-        if ($manual_previews_enabled) {
-            echo '<div style="background:#f6f7f7;border-left:4px solid #dba617;padding:10px 12px;margin-bottom:12px;">';
-            echo '<strong>Manual preview mode</strong> <span style="color:#2271b1;">Optional</span><br/>';
-            echo 'Runs in the current browser request and is best used only for quick checks.';
-            echo '</div>';
-        }
         if ($automation_enabled && $automation_process_inbox) {
             echo '<div style="background:#f6f7f7;border-left:4px solid #2271b1;padding:10px 12px;">';
-            echo '<strong>Automation Queue</strong> <span style="color:#2271b1;">Primary workflow</span><br/>';
-            echo 'Queued URLs are processed in paced runs. This install is currently set to <strong>' . (int) $queue_urls_per_run . ' URL(s)</strong> per pass with a <strong>' . (int) $queue_delay_minutes . '-minute</strong> delay between follow-up runs. Strong items become posts automatically; weaker or failed items move to Review.';
+            echo '<strong>New Font Queue</strong> <span style="color:#2271b1;">Primary workflow</span><br/>';
+            echo 'Queued URLs are processed in paced runs. This install is currently set to <strong>' . (int) $queue_urls_per_run . ' URL(s)</strong> per pass with a <strong>' . (int) $queue_delay_minutes . '-minute</strong> delay between follow-up runs. Strong items become posts automatically; weaker or failed items stay here for review.';
             echo '</div>';
         } else {
             echo '<div style="background:#fff8e5;border-left:4px solid #dba617;padding:10px 12px;">';
@@ -353,17 +341,14 @@ trait KACO_Admin_UI_Trait {
             echo '</div>';
         }
         echo '<p style="margin-top:12px;">';
-        if ($manual_previews_enabled) {
-            echo '<button type="submit" name="action" value="kaco_generate_font_previews" class="button button-secondary">Generate Draft Previews Now</button> ';
-        }
-        echo '<button type="submit" name="action" value="kaco_add_generator_urls_to_inbox" class="button button-primary"' . ($automation_enabled && $automation_process_inbox ? '' : ' disabled="disabled"') . '>Add To Automation Queue</button>';
+        echo '<button type="submit" name="action" value="kaco_add_generator_urls_to_inbox" class="button button-primary"' . ($automation_enabled && $automation_process_inbox ? '' : ' disabled="disabled"') . '>Add To New Font Queue</button>';
         echo '</p>';
         echo '</form>';
         echo '</div>';
 
         if ($automation_enabled && $automation_process_inbox) {
             echo '<div style="background:#fff;border:1px solid #dcdcde;padding:16px;">';
-            echo '<h3 style="margin-top:0;">Automation Queue</h3>';
+            echo '<h3 style="margin-top:0;">New Font Queue</h3>';
             echo '<p><strong>Queue status:</strong> ' . count($inbox) . ' URL(s) waiting';
             if (!empty($inbox)) {
                 echo '<br/>' . esc_html(implode(' | ', array_slice($inbox, 0, 5)));
@@ -379,40 +364,34 @@ trait KACO_Admin_UI_Trait {
             echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin-top:12px;">';
             wp_nonce_field(self::NONCE_ACTION);
             echo '<input type="hidden" name="action" value="kaco_process_generator_queue_now" />';
-            submit_button('Process Automation Queue Now', 'secondary', 'submit', false);
+            submit_button('Process Queue Now', 'secondary', 'submit', false);
             echo '</form>';
             echo '<p class="description">Use this when you want the queue processed immediately instead of waiting for WP-Cron. Each run processes only the configured queue slice, then schedules the next follow-up run if URLs remain.</p>';
             echo '</div>';
         }
         echo '</div>';
 
-        if (empty($previews) && empty($automation_previews)) {
+        if (empty($automation_previews)) {
             return;
         }
 
-        echo '<h3>Review items</h3>';
-        echo '<p class="description">Successful items disappear automatically after creation. Leave <code>create draft</code> unchecked to keep an item for later, or use <code>remove from review queue</code> to discard it.</p>';
+        echo '<h3>Needs Review</h3>';
+        echo '<p class="description">These new-font items were not auto-created. Successful items disappear automatically after creation. Leave <code>create draft</code> unchecked to keep an item for later, or use <code>remove from review queue</code> to discard it.</p>';
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
         wp_nonce_field(self::NONCE_ACTION);
         echo '<input type="hidden" name="action" value="kaco_create_generated_drafts" />';
 
-        $review_previews = array_merge(
-            array_map(function($item) {
-                $item['preview_source'] = 'automation';
-                return $item;
-            }, $automation_previews),
-            array_map(function($item) {
-                $item['preview_source'] = 'manual';
-                return $item;
-            }, $previews)
-        );
+        $review_previews = array_map(function($item) {
+            $item['preview_source'] = 'automation';
+            return $item;
+        }, $automation_previews);
 
         foreach ($review_previews as $index => $item) {
             $can_create = empty($item['automation_error'])
                 && trim((string) ($item['title'] ?? '')) !== ''
                 && trim((string) ($item['content'] ?? '')) !== '';
             echo '<div style="border:1px solid #ccd0d4;padding:12px;margin:0 0 18px 0;background:#fff;">';
-            echo '<p><strong>Source:</strong> ' . esc_html((string) ($item['preview_source'] ?? 'manual')) . '</p>';
+            echo '<p><strong>Source:</strong> queued automation</p>';
             echo '<p><strong>Source URL:</strong> ' . esc_html((string) ($item['url'] ?? '')) . '</p>';
             echo '<p><strong>Confidence:</strong> ' . esc_html(isset($item['confidence']) ? number_format((float) $item['confidence'], 2) : '0.00') . '</p>';
             if (!empty($item['evidence']) && is_array($item['evidence'])) {
@@ -427,7 +406,7 @@ trait KACO_Admin_UI_Trait {
             if (empty($item['designer_names'])) {
                 echo '<p><strong>Designer status:</strong> no explicit source match found. Review before creating the draft.</p>';
             }
-            echo '<input type="hidden" name="previews[' . (int) $index . '][preview_source]" value="' . esc_attr((string) ($item['preview_source'] ?? 'manual')) . '" />';
+            echo '<input type="hidden" name="previews[' . (int) $index . '][preview_source]" value="automation" />';
             echo '<input type="hidden" name="previews[' . (int) $index . '][url]" value="' . esc_attr((string) ($item['url'] ?? '')) . '" />';
             echo '<p><label><strong>Title</strong><br/><input type="text" name="previews[' . (int) $index . '][title]" value="' . esc_attr((string) ($item['title'] ?? '')) . '" class="regular-text" style="width:100%;" /></label></p>';
             echo '<p><label><strong>Image URL</strong><br/><input type="url" name="previews[' . (int) $index . '][image_url]" value="' . esc_attr((string) ($item['image_url'] ?? '')) . '" class="regular-text" style="width:100%;" /></label></p>';
@@ -516,7 +495,7 @@ trait KACO_Admin_UI_Trait {
                 echo '<td>' . esc_html((string) ($row['proposed_preview'] ?? '-')) . '</td>';
                 echo '<td>' . esc_html(implode(', ', (array) ($row['issues'] ?? array()))) . '</td>';
                 echo '<td>' . esc_html(!empty($row['changes']) ? implode(' | ', (array) $row['changes']) : 'No automatic repair available') . '</td>';
-                echo '<td>' . esc_html($applyable ? ($review_required ? 'Applyable with review notes' : 'Applyable') : 'Review only') . '</td>';
+                echo '<td>' . esc_html($applyable ? ($review_required ? 'Applyable with review notes' : 'Applyable') : 'Needs review') . '</td>';
                 echo '</tr>';
             }
             echo '</tbody></table>';
@@ -607,33 +586,6 @@ trait KACO_Admin_UI_Trait {
                 echo '<td>' . esc_html($confidence) . '</td>';
                 echo '<td>' . esc_html((string) $row['updated_at']) . '</td>';
                 echo '<td><a href="' . esc_url(admin_url('admin.php?page=kaco-dashboard&view=suggestions&filter=needs_review')) . '">Open in Suggestions</a></td>';
-                echo '</tr>';
-            }
-            echo '</tbody></table>';
-        }
-        }
-
-        if ($review_filter === 'all' || $review_filter === 'generator') {
-            echo '<h3>Generator queue</h3>';
-            echo '<p class="description">These new-font previews were not auto-created. Create them now, retry extraction, or discard them.</p>';
-        if (empty($generator_review)) {
-            echo '<p>No generator previews are waiting for review.</p>';
-        } else {
-            echo '<table class="widefat striped"><thead><tr><th>URL</th><th>Title</th><th>Confidence</th><th>Note</th><th>Actions</th></tr></thead><tbody>';
-            foreach ($generator_review as $queue_key => $item) {
-                echo '<tr>';
-                echo '<td>' . esc_html((string) ($item['url'] ?? '')) . '</td>';
-                echo '<td>' . esc_html((string) ($item['title'] ?? '')) . '</td>';
-                echo '<td>' . esc_html(isset($item['confidence']) ? number_format((float) $item['confidence'], 2) : '0.00') . '</td>';
-                echo '<td>' . esc_html((string) ($item['automation_error'] ?? 'Manual review required.')) . '</td>';
-                echo '<td>';
-                if (!empty($item['diagnostics']) && get_option('kaco_debug_mode', '0') === '1') {
-                    echo '<details style="margin:0 0 8px 0;"><summary>Diagnostics</summary><pre style="white-space:pre-wrap;word-break:break-word;">' . esc_html($this->format_debug_data($item['diagnostics'])) . '</pre></details>';
-                }
-                $this->render_generator_review_action_form('kaco_create_generator_review_item', 'Create Now', (int) $queue_key);
-                $this->render_generator_review_action_form('kaco_retry_generator_review_item', 'Retry', (int) $queue_key);
-                $this->render_generator_review_action_form('kaco_discard_generator_review_item', 'Discard', (int) $queue_key);
-                echo '</td>';
                 echo '</tr>';
             }
             echo '</tbody></table>';
@@ -1254,7 +1206,6 @@ trait KACO_Admin_UI_Trait {
         $automation_generator_create_confidence = (string) get_option('kaco_automation_generator_create_confidence', '0.90');
         $automation_auto_schedule_generated_posts = (string) get_option('kaco_automation_auto_schedule_generated_posts', '1');
         $automation_generated_post_spacing_hours = (int) get_option('kaco_automation_generated_post_spacing_hours', 3);
-        $enable_manual_generator_previews = (string) get_option('kaco_enable_manual_generator_previews', '0');
         $automation_last_run = get_option('kaco_automation_last_run', array());
         $parent_warnings = $this->get_parent_category_warnings();
         $section_style = 'background:#fff;border:1px solid #dcdcde;padding:16px;margin:18px 0;';
@@ -1274,7 +1225,7 @@ trait KACO_Admin_UI_Trait {
         echo '<p class="description">Controls the model and endpoint used for generation, optimization, and category drafting.</p>';
         echo '<table class="form-table" role="presentation"><tbody>';
         echo '<tr><th scope="row"><label for="kaco_openai_api_key">OpenAI API key</label></th>';
-        echo '<td><input type="password" id="kaco_openai_api_key" name="kaco_openai_api_key" value="' . esc_attr($openai_key) . '" class="regular-text" autocomplete="off" /><p class="description">Required for every AI action in Create, Refresh, Review, and Categories.</p></td></tr>';
+        echo '<td><input type="password" id="kaco_openai_api_key" name="kaco_openai_api_key" value="' . esc_attr($openai_key) . '" class="regular-text" autocomplete="off" /><p class="description">Required for every AI action in New Fonts, Refresh Existing, Problems, and Taxonomy.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_openai_model">OpenAI model</label></th>';
         echo '<td><input type="text" id="kaco_openai_model" name="kaco_openai_model" value="' . esc_attr($openai_model) . '" class="regular-text" /><p class="description">Current recommended default is <code>gpt-5-mini</code>. Change this only when you intentionally want different cost or quality behavior.</p></td></tr>';
         echo '<tr><td colspan="2" style="padding:0;">';
@@ -1325,8 +1276,6 @@ trait KACO_Admin_UI_Trait {
         echo '<h3 style="margin-top:0;">Automation</h3>';
         echo '<p class="description">Controls scheduled old-post refreshes and queued new-font processing. The highest-risk switches are called out explicitly.</p>';
         echo '<table class="form-table" role="presentation"><tbody>';
-        echo '<tr><th scope="row"><label for="kaco_enable_manual_generator_previews">Manual preview generation</label></th>';
-        echo '<td><label><input type="checkbox" id="kaco_enable_manual_generator_previews" name="kaco_enable_manual_generator_previews" value="1" ' . checked('1', $enable_manual_generator_previews, false) . ' /> yes</label><p class="description">Re-enables the old \"Generate Draft Previews Now\" path in Create. Leave this off for the simpler queue-only workflow.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_automation_enabled">Automation enabled</label></th>';
         echo '<td><label><input type="checkbox" id="kaco_automation_enabled" name="kaco_automation_enabled" value="1" ' . checked('1', $automation_enabled, false) . ' /> yes</label><p class="description">Master switch for scheduled audits and queued URL processing. Disable this if you want the plugin to run only on manual actions.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_automation_frequency">Automation frequency</label></th>';
@@ -1373,7 +1322,7 @@ trait KACO_Admin_UI_Trait {
         echo '<tr><th scope="row"><label for="kaco_automation_apply_confidence">Automation auto-apply confidence</label></th>';
         echo '<td><input type="number" step="0.01" min="0" max="1" id="kaco_automation_apply_confidence" name="kaco_automation_apply_confidence" value="' . esc_attr($automation_apply_confidence) . '" /><p class="description">Set this above the approval threshold. This should be your strictest gate.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_automation_process_url_inbox">Automation process queue</label></th>';
-        echo '<td><label><input type="checkbox" id="kaco_automation_process_url_inbox" name="kaco_automation_process_url_inbox" value="1" ' . checked('1', $automation_process_url_inbox, false) . ' /> yes</label><p class="description">Processes the Create lane\'s Automation Queue during scheduled runs.</p></td></tr>';
+        echo '<td><label><input type="checkbox" id="kaco_automation_process_url_inbox" name="kaco_automation_process_url_inbox" value="1" ' . checked('1', $automation_process_url_inbox, false) . ' /> yes</label><p class="description">Processes the New Fonts lane\'s queue during scheduled runs.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_automation_url_batch_size">Automation URL batch size</label></th>';
         echo '<td><input type="number" min="1" max="100" id="kaco_automation_url_batch_size" name="kaco_automation_url_batch_size" value="' . (int) $automation_url_batch_size . '" /><p class="description">Keep this modest if your host times out on marketplace fetches or multiple AI calls.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_automation_queue_urls_per_run">Queue URLs per run</label></th>';
@@ -1381,7 +1330,7 @@ trait KACO_Admin_UI_Trait {
         echo '<tr><th scope="row"><label for="kaco_automation_queue_delay_minutes">Queue delay (minutes)</label></th>';
         echo '<td><input type="number" min="1" max="240" id="kaco_automation_queue_delay_minutes" name="kaco_automation_queue_delay_minutes" value="' . (int) $automation_queue_delay_minutes . '" /><p class="description">Recommended: <code>10</code>. Remaining URLs are picked up by a dedicated queue event after this delay instead of being processed back-to-back.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_automation_auto_create_drafts">Automation auto-create posts</label></th>';
-        echo '<td><label><input type="checkbox" id="kaco_automation_auto_create_drafts" name="kaco_automation_auto_create_drafts" value="1" ' . checked('1', $automation_auto_create_drafts, false) . ' /> yes</label><p class="description">High-confidence generator previews become posts automatically. Lower-confidence items stay in Review.</p></td></tr>';
+        echo '<td><label><input type="checkbox" id="kaco_automation_auto_create_drafts" name="kaco_automation_auto_create_drafts" value="1" ' . checked('1', $automation_auto_create_drafts, false) . ' /> yes</label><p class="description">High-confidence new-font items become posts automatically. Lower-confidence items stay in New Fonts for review.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_automation_generator_create_confidence">Generator auto-create confidence</label></th>';
         echo '<td><input type="number" step="0.01" min="0" max="1" id="kaco_automation_generator_create_confidence" name="kaco_automation_generator_create_confidence" value="' . esc_attr($automation_generator_create_confidence) . '" /><p class="description">Primary safety gate for new-font automation. Raise this if Creative Market or MyFonts extraction is noisy.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_automation_auto_schedule_generated_posts">Auto-schedule generated posts</label></th>';
@@ -1430,7 +1379,7 @@ trait KACO_Admin_UI_Trait {
         echo '<p class="description">Use this when you are investigating failures or validating parser behavior on a staging site.</p>';
         echo '<table class="form-table" role="presentation"><tbody>';
         echo '<tr><th scope="row"><label for="kaco_debug_mode">Diagnostics mode</label></th>';
-        echo '<td><label><input type="checkbox" id="kaco_debug_mode" name="kaco_debug_mode" value="1" ' . checked('1', $debug_mode, false) . ' /> yes</label><p class="description">Shows detailed failure diagnostics for source fetch, parser, OpenAI, and write stages in Create and Review. Leave this off during normal operation unless you are troubleshooting.</p></td></tr>';
+        echo '<td><label><input type="checkbox" id="kaco_debug_mode" name="kaco_debug_mode" value="1" ' . checked('1', $debug_mode, false) . ' /> yes</label><p class="description">Shows detailed failure diagnostics for source fetch, parser, OpenAI, and write stages in New Fonts and Problems. Leave this off during normal operation unless you are troubleshooting.</p></td></tr>';
         echo '</tbody></table>';
         echo '</div>';
 
@@ -1450,9 +1399,9 @@ trait KACO_Admin_UI_Trait {
             if (!empty($automation_last_run['generator_inbox']) && is_array($automation_last_run['generator_inbox'])) {
                 $automation_bits[] = 'Inbox processed: ' . (int) ($automation_last_run['generator_inbox']['processed'] ?? 0);
                 $automation_bits[] = 'Drafts created: ' . (int) ($automation_last_run['generator_inbox']['created'] ?? 0);
-                $automation_bits[] = 'Review queued: ' . (int) ($automation_last_run['generator_inbox']['queued_for_review'] ?? 0);
+                $automation_bits[] = 'New-font review queued: ' . (int) ($automation_last_run['generator_inbox']['queued_for_review'] ?? 0);
             }
-            $automation_bits[] = '<a href="' . esc_url(admin_url('admin.php?page=kaco-dashboard&view=exceptions')) . '">Open exceptions</a>';
+            $automation_bits[] = '<a href="' . esc_url(admin_url('admin.php?page=kaco-dashboard&view=review')) . '">Open problems</a>';
             echo '<p><strong>Last automation run</strong><br/>' . implode(' | ', $automation_bits) . '</p>';
         }
 
@@ -1484,7 +1433,6 @@ trait KACO_Admin_UI_Trait {
         update_option('kaco_tag_min_posts_per_tag', max(1, (int) ($_POST['kaco_tag_min_posts_per_tag'] ?? 2)));
         update_option('kaco_editorial_style_guide', sanitize_textarea_field((string) ($_POST['kaco_editorial_style_guide'] ?? '')));
         update_option('kaco_rewrite_mode', $this->sanitize_rewrite_mode((string) ($_POST['kaco_rewrite_mode'] ?? 'replace_body')));
-        update_option('kaco_enable_manual_generator_previews', !empty($_POST['kaco_enable_manual_generator_previews']) ? '1' : '0');
         update_option('kaco_automation_enabled', !empty($_POST['kaco_automation_enabled']) ? '1' : '0');
         update_option('kaco_automation_frequency', $this->sanitize_automation_frequency((string) ($_POST['kaco_automation_frequency'] ?? 'daily')));
         update_option('kaco_automation_post_type', sanitize_key((string) ($_POST['kaco_automation_post_type'] ?? 'post')));

@@ -32,7 +32,6 @@ final class KACO_Plugin {
         add_action('kaco_generator_queue_event', array($this, 'handle_generator_queue_event'));
         add_action('admin_post_kaco_add_generator_urls_to_inbox', array($this, 'handle_add_generator_urls_to_inbox'));
         add_action('admin_post_kaco_process_generator_queue_now', array($this, 'handle_process_generator_queue_now'));
-        add_action('admin_post_kaco_generate_font_previews', array($this, 'handle_generate_font_previews'));
         add_action('admin_post_kaco_create_generated_drafts', array($this, 'handle_create_generated_drafts'));
         add_action('admin_post_kaco_retry_generator_review_item', array($this, 'handle_retry_generator_review_item'));
         add_action('admin_post_kaco_discard_generator_review_item', array($this, 'handle_discard_generator_review_item'));
@@ -111,8 +110,6 @@ final class KACO_Plugin {
         add_option('kaco_tag_merge_history', array());
         add_option('kaco_editorial_style_guide', 'Write like an editorial font reviewer. Avoid filler words such as versatile, unique touch, suitable for various projects, reliable choice, and engaging aesthetics. Use concrete visual observations and specific use cases. Do not invent technical features.');
         add_option('kaco_rewrite_mode', 'replace_body');
-        add_option('kaco_generator_preview_store', array());
-        add_option('kaco_enable_manual_generator_previews', '0');
         add_option('kaco_generator_url_inbox', array());
         add_option('kaco_generator_automation_review', array());
         add_option('kaco_automation_enabled', '0');
@@ -178,9 +175,9 @@ final class KACO_Plugin {
 
         echo '<nav class="nav-tab-wrapper">';
         $this->tab_link('dashboard', 'Dashboard', $view);
-        $this->tab_link('create', 'Create', $view);
-        $this->tab_link('refresh', 'Refresh', $view);
-        $this->tab_link('review', 'Review', $view);
+        $this->tab_link('create', 'New Fonts', $view);
+        $this->tab_link('refresh', 'Refresh Existing', $view);
+        $this->tab_link('review', 'Problems', $view);
         $this->tab_link('taxonomy', 'Taxonomy', $view);
         $this->tab_link('settings', 'Settings', $view);
         echo '</nav>';

@@ -27,7 +27,7 @@ trait KACO_Actions_Trait {
         $this->require_admin_request();
 
         if (get_option('kaco_automation_process_url_inbox', '1') !== '1') {
-            $this->redirect_with_notice('Automation Queue processing is disabled in settings.', 'create');
+            $this->redirect_with_notice('New-font queue processing is disabled in settings.', 'create');
         }
 
         $summary = $this->process_generator_url_inbox();
@@ -39,7 +39,7 @@ trait KACO_Actions_Trait {
         $last_run['generator_inbox'] = $summary;
         update_option('kaco_automation_last_run', $last_run, false);
 
-        $message = 'Automation Queue processed: '
+        $message = 'New-font queue processed: '
             . (int) ($summary['processed'] ?? 0) . ' URL(s), '
             . (int) ($summary['created'] ?? 0) . ' created, '
             . (int) ($summary['queued_for_review'] ?? 0) . ' queued for review, '
