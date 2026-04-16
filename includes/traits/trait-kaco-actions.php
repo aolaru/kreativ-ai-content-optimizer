@@ -68,7 +68,7 @@ trait KACO_Actions_Trait {
     public function handle_scan_hierarchy_cleanup() {
         $this->require_admin_request();
 
-        $post_type = sanitize_key((string) ($_POST['kaco_cleanup_post_type'] ?? 'post'));
+        $post_type = sanitize_key((string) ($_POST['kaco_cleanup_post_type'] ?? $this->automation_post_type()));
         $limit = min(1000, max(1, (int) ($_POST['kaco_cleanup_limit'] ?? 200)));
         $scan_all = !empty($_POST['kaco_cleanup_scan_all']);
         $fonts_only = !empty($_POST['kaco_cleanup_fonts_only']);

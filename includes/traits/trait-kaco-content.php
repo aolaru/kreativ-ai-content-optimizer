@@ -227,7 +227,7 @@ trait KACO_Content_Trait {
         }
 
         $query_args = array(
-            'post_type' => 'post',
+            'post_type' => $this->automation_post_type(),
             'post_status' => 'publish',
             'posts_per_page' => 5,
             'post__not_in' => array($post_id),

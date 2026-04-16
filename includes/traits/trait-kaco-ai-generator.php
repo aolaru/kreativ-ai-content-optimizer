@@ -2200,7 +2200,7 @@ trait KACO_AI_Generator_Trait {
         $post_status = !empty($options['scheduled']) ? 'future' : 'draft';
         $post_dates = array();
         $post_data = array(
-            'post_type' => 'post',
+            'post_type' => $this->automation_post_type(),
             'post_status' => $post_status,
             'post_title' => $title,
             'post_content' => $content,
@@ -2277,7 +2277,7 @@ trait KACO_AI_Generator_Trait {
         $base_timestamp = $now_gmt;
 
         $latest_future = get_posts(array(
-            'post_type' => 'post',
+            'post_type' => $this->automation_post_type(),
             'post_status' => 'future',
             'posts_per_page' => 1,
             'orderby' => 'date',
@@ -2559,7 +2559,7 @@ trait KACO_AI_Generator_Trait {
         }
 
         $query = new WP_Query(array(
-            'post_type' => 'post',
+            'post_type' => $this->automation_post_type(),
             'post_status' => array('publish', 'draft', 'pending', 'private'),
             'posts_per_page' => 1,
             'fields' => 'ids',

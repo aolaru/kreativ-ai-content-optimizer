@@ -169,7 +169,7 @@ trait KACO_Taxonomy_Tags_Trait {
 
     private function find_over_tagged_posts($max_tags) {
         $query = new WP_Query(array(
-            'post_type' => 'post',
+            'post_type' => $this->automation_post_type(),
             'post_status' => array('publish', 'draft'),
             'posts_per_page' => 200,
             'fields' => 'ids',

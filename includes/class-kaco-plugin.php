@@ -18,6 +18,10 @@ final class KACO_Plugin {
     const NONCE_ACTION = 'kaco_admin_action';
     const OPENAI_ENDPOINT = 'https://api.openai.com/v1/responses';
     const OPENAI_MODEL = 'gpt-5-mini';
+    const OPENAI_ALLOWED_MODELS = array(
+        'gpt-5-mini',
+        'gpt-4.1-mini',
+    );
 
     private $plugin_file;
 
@@ -256,5 +260,25 @@ final class KACO_Plugin {
     private function sanitize_automation_frequency($value) {
         $allowed = array('hourly', 'twicedaily', 'daily');
         return in_array($value, $allowed, true) ? $value : 'daily';
+    }
+
+    private function sanitize_openai_model($value) {
+        $value = sanitize_text_field((string) $value);
+        if (in_array($value, self::OPENAI_ALLOWED_MODELS, true)) {
+            return $value;
+        }
+        return self::OPENAI_MODEL;
+    }
+
+    private function allowed_openai_models() {
+        return self::OPENAI_ALLOWED_MODELS;
+    }
+
+    private function automation_post_type() {
+        $post_type = sanitize_key((string) get_option('kaco_automation_post_type', 'post'));
+        if ($post_type === '' || !post_type_exists($post_type)) {
+            return 'post';
+        }
+        return $post_type;
     }
 }
