@@ -7,7 +7,6 @@ trait KACO_Admin_UI_Trait {
             'create' => array('create', 'generator'),
             'refresh' => array('refresh', 'audit'),
             'review' => array('review', 'exceptions', 'suggestions'),
-            'taxonomy' => array('taxonomy', 'cleanup', 'categories', 'tags'),
             'settings' => array('settings'),
         );
         $is_active = in_array($current, $grouped[$slug] ?? array($slug), true);
@@ -27,8 +26,6 @@ trait KACO_Admin_UI_Trait {
         $new_font_review = count($this->get_generator_automation_review());
         $url_inbox = count($this->get_generator_url_inbox());
         $next_queue_run = (int) wp_next_scheduled('kaco_generator_queue_event');
-        $cleanup_plan = $this->get_hierarchy_cleanup_plan();
-        $cleanup_rows = !empty($cleanup_plan['rows']) && is_array($cleanup_plan['rows']) ? count($cleanup_plan['rows']) : 0;
         $logs = $this->get_automation_logs();
         $failed_logs = count(array_filter((array) $logs, function($item) {
             return in_array((string) ($item['status'] ?? ''), array('failed', 'needs_review'), true);
@@ -78,7 +75,6 @@ trait KACO_Admin_UI_Trait {
         $this->render_dashboard_card('Problems', 'Suggestions needing review', (string) $needs_review, 'Open Problems', admin_url('admin.php?page=kaco-dashboard&view=review'));
         $this->render_dashboard_card('Problems', 'Approved and ready to apply', (string) $approved, 'Open Problems', admin_url('admin.php?page=kaco-dashboard&view=review'));
         $this->render_dashboard_card('Refresh Existing', 'Pending suggestions', (string) $pending, 'Open Refresh Existing', admin_url('admin.php?page=kaco-dashboard&view=refresh'));
-        $this->render_dashboard_card('Taxonomy', 'Hierarchy cleanup rows', (string) $cleanup_rows, 'Open Taxonomy', admin_url('admin.php?page=kaco-dashboard&view=taxonomy'));
         echo '</div>';
 
         echo '<h3>Current state</h3>';
@@ -86,7 +82,6 @@ trait KACO_Admin_UI_Trait {
         echo '<li><strong>New Fonts:</strong> ' . (int) $url_inbox . ' URL(s) waiting, ' . (int) $new_font_review . ' item(s) need review' . ($next_queue_run > 0 ? ', next queue pass ' . esc_html(wp_date('Y-m-d H:i', $next_queue_run)) : '') . '.</li>';
         echo '<li><strong>Refresh Existing:</strong> ' . (int) $pending . ' pending, ' . (int) $needs_review . ' need review, ' . (int) $approved . ' ready to apply, ' . (int) $applied . ' applied.</li>';
         echo '<li><strong>Problems:</strong> ' . (int) $failed_logs . ' recent failure log item(s).</li>';
-        echo '<li><strong>Taxonomy:</strong> ' . (int) $cleanup_rows . ' hierarchy cleanup row(s) in the latest scan.</li>';
         echo '</ul>';
 
         if (!empty($automation_last_run) && is_array($automation_last_run)) {
@@ -109,10 +104,9 @@ trait KACO_Admin_UI_Trait {
             echo '</p>';
         }
 
-        echo '<h3>Maintenance lanes</h3>';
+        echo '<h3>Maintenance</h3>';
         echo '<ul>';
-        echo '<li><strong>Taxonomy:</strong> clean hierarchy drift, category descriptions, and tags when archive structure needs repair.</li>';
-        echo '<li><strong>Settings:</strong> change thresholds, automation behavior, and diagnostics only when you intend to alter operating mode.</li>';
+        echo '<li><strong>Settings:</strong> change thresholds, automation behavior, category mapping, and diagnostics only when you intend to alter operating mode.</li>';
         echo '</ul>';
     }
 
@@ -333,6 +327,7 @@ trait KACO_Admin_UI_Trait {
         $queue_delay_minutes = min(240, max(1, (int) get_option('kaco_automation_queue_delay_minutes', 10)));
         $last_run = get_option('kaco_automation_last_run', array());
         $last_queue_summary = !empty($last_run['generator_inbox']) && is_array($last_run['generator_inbox']) ? (array) $last_run['generator_inbox'] : array();
+        $queue_activity = $this->recent_new_font_queue_activity(12);
 
         echo '<h2>New Fonts</h2>';
         echo '<p>Add marketplace URLs to the new-font queue, process the queue in paced runs, then review or create posts from the results.</p>';
@@ -385,6 +380,37 @@ trait KACO_Admin_UI_Trait {
             submit_button('Process Queue Now', 'secondary', 'submit', false);
             echo '</form>';
             echo '<p class="description">Use this when you want the queue processed immediately instead of waiting for WP-Cron. Each run processes only the configured queue slice, then schedules the next follow-up run if URLs remain.</p>';
+
+            echo '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-top:18px;">';
+            echo '<div>';
+            echo '<h4 style="margin:0 0 8px 0;">Waiting</h4>';
+            if (empty($inbox)) {
+                echo '<p class="description">No URLs are currently waiting in the queue.</p>';
+            } else {
+                echo '<table class="widefat striped"><thead><tr><th>State</th><th>URL</th></tr></thead><tbody>';
+                foreach ((array) $inbox as $queued_url) {
+                    echo '<tr><td>waiting</td><td style="word-break:break-word;">' . esc_html((string) $queued_url) . '</td></tr>';
+                }
+                echo '</tbody></table>';
+            }
+            echo '</div>';
+            echo '<div>';
+            echo '<h4 style="margin:0 0 8px 0;">Recent Queue Activity</h4>';
+            if (empty($queue_activity)) {
+                echo '<p class="description">No recent queue activity recorded yet.</p>';
+            } else {
+                echo '<table class="widefat striped"><thead><tr><th>When</th><th>State</th><th>Item</th></tr></thead><tbody>';
+                foreach ($queue_activity as $entry) {
+                    echo '<tr>';
+                    echo '<td>' . esc_html((string) ($entry['logged_at'] ?? '')) . '</td>';
+                    echo '<td>' . esc_html((string) ($entry['state_label'] ?? '')) . '</td>';
+                    echo '<td style="word-break:break-word;">' . esc_html((string) ($entry['item_label'] ?? '')) . '</td>';
+                    echo '</tr>';
+                }
+                echo '</tbody></table>';
+            }
+            echo '</div>';
+            echo '</div>';
             echo '</div>';
         }
         echo '</div>';
@@ -912,85 +938,30 @@ trait KACO_Admin_UI_Trait {
     private function render_suggestions_view() {
         global $wpdb;
         $table = $this->table_name();
-        $filter = isset($_GET['filter']) ? sanitize_key((string) $_GET['filter']) : '';
-        if ($filter === '') {
-            $review_filter = isset($_GET['review_filter']) ? sanitize_key((string) $_GET['review_filter']) : '';
-            if ($review_filter === 'approved') {
-                $filter = 'approved';
-            } elseif ($review_filter === 'needs_review') {
-                $filter = 'needs_review';
-            } elseif ($review_filter === 'all') {
-                $filter = 'approved';
-            }
+        $filter = isset($_GET['filter']) ? sanitize_key((string) $_GET['filter']) : 'approved';
+        $allowed = array('approved', 'applied');
+        if (!in_array($filter, $allowed, true)) {
+            $filter = 'approved';
         }
-        $where = '1=1';
-        if ($filter === 'needs_review') {
-            $where = "status = 'needs_review'";
-        } elseif ($filter === 'approved') {
-            $where = "status = 'approved'";
-        } elseif ($filter === 'pending') {
-            $where = "status = 'pending'";
-        } elseif ($filter === 'missing_designer') {
-            $where = "audit_data LIKE '%designer%'";
-        } elseif ($filter === 'missing_foundry') {
-            $where = "audit_data LIKE '%foundry%'";
-        } elseif ($filter === 'missing_font_style') {
-            $where = "audit_data LIKE '%font_style%'";
-        } elseif ($filter === 'missing_font_mood') {
-            $where = "audit_data LIKE '%font_mood%'";
-        } elseif ($filter === 'missing_font_use_case') {
-            $where = "audit_data LIKE '%font_use_case%'";
-        }
+        $where = $filter === 'applied' ? "status = 'applied'" : "status IN ('approved','applied')";
         $rows = $wpdb->get_results("SELECT * FROM {$table} WHERE {$where} ORDER BY created_at DESC LIMIT 200", ARRAY_A);
 
         echo '<h2>Ready to apply</h2>';
         echo '<p>These are approved refresh suggestions. Applying them writes the proposed update into the live post with rollback support.</p>';
         echo '<p>';
-        foreach (array('all' => 'All', 'pending' => 'Pending', 'needs_review' => 'Needs Review', 'approved' => 'Approved', 'missing_designer' => 'Missing Designer', 'missing_foundry' => 'Missing Foundry', 'missing_font_style' => 'Missing Font Style', 'missing_font_mood' => 'Missing Font Mood', 'missing_font_use_case' => 'Missing Font Use Case') as $key => $label) {
+        foreach (array('approved' => 'Approved + Applied', 'applied' => 'Applied Only') as $key => $label) {
             $url = admin_url('admin.php?page=kaco-dashboard&view=review' . ($key !== 'all' ? '&filter=' . $key : ''));
             echo '<a href="' . esc_url($url) . '" style="margin-right:10px;">' . esc_html($label) . '</a>';
         }
         echo '</p>';
-        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin:10px 0 20px 0;">';
-        wp_nonce_field(self::NONCE_ACTION);
-        echo '<input type="hidden" name="action" value="kaco_generate_ai_batch" />';
-        echo '<label for="kaco_ai_batch_size">Generate AI for pending items: </label> ';
-        echo '<input type="number" min="1" max="100" id="kaco_ai_batch_size" name="kaco_ai_batch_size" value="20" /> ';
-        submit_button('Run AI Batch', 'secondary', '', false);
-        echo '</form>';
-
-        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="display:inline-block;margin:0 12px 16px 0;">';
-        wp_nonce_field(self::NONCE_ACTION);
-        echo '<input type="hidden" name="action" value="kaco_export_suggestions_csv" />';
-        submit_button('Export CSV', 'secondary', '', false);
-        echo '</form>';
-        echo '<form method="post" enctype="multipart/form-data" action="' . esc_url(admin_url('admin-post.php')) . '" style="display:inline-block;margin:0 12px 16px 0;">';
-        wp_nonce_field(self::NONCE_ACTION);
-        echo '<input type="hidden" name="action" value="kaco_import_suggestions_csv" />';
-        echo '<input type="file" name="kaco_csv_file" accept=".csv" /> ';
-        submit_button('Import CSV', 'secondary', '', false);
-        echo '</form>';
 
         if (!$rows) {
-            echo '<p>No suggestions yet.</p>';
+            echo '<p>No approved refresh suggestions are waiting here.</p>';
             return;
         }
 
-        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
-        wp_nonce_field(self::NONCE_ACTION);
-        echo '<input type="hidden" name="action" value="kaco_bulk_suggestions" />';
-        echo '<p><select name="kaco_bulk_action">';
-        echo '<option value="">Bulk action</option>';
-        echo '<option value="generate_ai">Generate AI</option>';
-        echo '<option value="approve">Approve</option>';
-        echo '<option value="apply">Apply</option>';
-        echo '<option value="reject">Reject</option>';
-        echo '</select> ';
-        submit_button('Run', 'secondary', '', false);
-        echo '</p>';
-
         echo '<table class="widefat striped">';
-        echo '<thead><tr><th><input type="checkbox" onclick="jQuery(\'.kaco-select\').prop(\'checked\', this.checked);" /></th><th>ID</th><th>Post</th><th>Status</th><th>Findings</th><th>AI</th><th>Created</th><th>Actions</th></tr></thead><tbody>';
+        echo '<thead><tr><th>ID</th><th>Post</th><th>Status</th><th>Findings</th><th>AI</th><th>Created</th><th>Actions</th></tr></thead><tbody>';
 
         foreach ($rows as $row) {
             $post_link = get_edit_post_link((int) $row['post_id']);
@@ -1012,7 +983,6 @@ trait KACO_Admin_UI_Trait {
             $below_threshold = !empty($ai) && !$this->passes_ai_confidence($ai);
 
             echo '<tr>';
-            echo '<td><input class="kaco-select" type="checkbox" name="suggestion_ids[]" value="' . (int) $row['id'] . '" /></td>';
             echo '<td>' . (int) $row['id'] . '</td>';
             echo '<td><a href="' . esc_url($post_link) . '">' . esc_html($post_title ?: ('Post #' . (int) $row['post_id'])) . '</a></td>';
             echo '<td>' . esc_html($row['status']) . '</td>';
@@ -1021,17 +991,10 @@ trait KACO_Admin_UI_Trait {
             echo '<td>' . esc_html($row['created_at']) . '</td>';
             echo '<td>';
 
-            if ($row['status'] === 'pending' || $row['status'] === 'needs_review') {
-                $this->render_action_form('kaco_generate_ai_suggestion', 'Generate AI', (int) $row['id']);
-                $this->render_action_form('kaco_approve_suggestion', 'Approve', (int) $row['id']);
-                $this->render_action_form('kaco_reject_suggestion', 'Reject', (int) $row['id']);
-            }
-
             if ($row['status'] === 'approved') {
                 if (!$below_threshold) {
                     $this->render_action_form('kaco_apply_suggestion', 'Apply', (int) $row['id']);
                 }
-                $this->render_action_form('kaco_reject_suggestion', 'Reject', (int) $row['id']);
             }
 
             if ($row['status'] === 'applied') {
@@ -1040,11 +1003,41 @@ trait KACO_Admin_UI_Trait {
 
             echo '</td>';
             echo '</tr>';
-            echo '<tr><td></td><td colspan="7">' . $this->render_preview_panel($row, $audit, $suggestion, $ai) . '</td></tr>';
+            echo '<tr><td></td><td colspan="6">' . $this->render_preview_panel($row, $audit, $suggestion, $ai) . '</td></tr>';
         }
 
         echo '</tbody></table>';
-        echo '</form>';
+    }
+
+    private function recent_new_font_queue_activity($limit = 12) {
+        $limit = min(50, max(1, (int) $limit));
+        $logs = array_values(array_filter((array) $this->get_automation_logs(), function($item) {
+            return (string) ($item['lane'] ?? '') === 'generator';
+        }));
+        $logs = array_slice($logs, 0, $limit);
+        return array_map(function($item) {
+            $status = (string) ($item['status'] ?? '');
+            $action = (string) ($item['action'] ?? '');
+            $label = $status;
+            if ($action === 'queue_review') {
+                $label = 'needs review';
+            } elseif ($action === 'create_post' && $status === 'success') {
+                $label = 'created';
+            } elseif ($action === 'create_post' && $status === 'skipped') {
+                $label = 'duplicate';
+            } elseif ($action === 'generate_preview' && $status === 'failed') {
+                $label = 'failed';
+            }
+            $item_label = (string) ($item['title'] ?? '');
+            if ($item_label === '') {
+                $item_label = (string) ($item['url'] ?? '');
+            } elseif (!empty($item['url'])) {
+                $item_label .= ' | ' . (string) $item['url'];
+            }
+            $item['state_label'] = $label;
+            $item['item_label'] = $item_label;
+            return $item;
+        }, $logs);
     }
 
     private function render_action_form($action, $label, $suggestion_id) {
@@ -1216,6 +1209,7 @@ trait KACO_Admin_UI_Trait {
         $editorial_style_guide = (string) get_option('kaco_editorial_style_guide', '');
         $rewrite_mode = (string) get_option('kaco_rewrite_mode', 'replace_body');
         $automation_enabled = (string) get_option('kaco_automation_enabled', '0');
+        $automation_operating_mode = $this->sanitize_automation_operating_mode((string) get_option('kaco_automation_operating_mode', 'balanced'));
         $automation_frequency = (string) get_option('kaco_automation_frequency', 'daily');
         $automation_post_type = $this->automation_post_type();
         $automation_scan_limit = (int) get_option('kaco_automation_scan_limit', 50);
@@ -1253,7 +1247,7 @@ trait KACO_Admin_UI_Trait {
         echo '<p class="description">Controls the model and endpoint used for generation, optimization, and category drafting.</p>';
         echo '<table class="form-table" role="presentation"><tbody>';
         echo '<tr><th scope="row"><label for="kaco_openai_api_key">OpenAI API key</label></th>';
-        echo '<td><input type="password" id="kaco_openai_api_key" name="kaco_openai_api_key" value="' . esc_attr($openai_key) . '" class="regular-text" autocomplete="off" /><p class="description">Required for every AI action in New Fonts, Refresh Existing, Problems, and Taxonomy.</p></td></tr>';
+        echo '<td><input type="password" id="kaco_openai_api_key" name="kaco_openai_api_key" value="' . esc_attr($openai_key) . '" class="regular-text" autocomplete="off" /><p class="description">Required for every AI action in New Fonts, Refresh Existing, and Problems.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_openai_model">OpenAI model</label></th>';
         echo '<td><select id="kaco_openai_model" name="kaco_openai_model">';
         foreach ($this->allowed_openai_models() as $model_name) {
@@ -1308,6 +1302,16 @@ trait KACO_Admin_UI_Trait {
         echo '<h3 style="margin-top:0;">Automation</h3>';
         echo '<p class="description">Controls scheduled old-post refreshes and queued new-font processing. The highest-risk switches are called out explicitly.</p>';
         echo '<table class="form-table" role="presentation"><tbody>';
+        echo '<tr><th scope="row"><label for="kaco_automation_operating_mode">Operating mode</label></th>';
+        echo '<td><select id="kaco_automation_operating_mode" name="kaco_automation_operating_mode">';
+        foreach ($this->automation_operating_modes() as $mode_key => $mode) {
+            echo '<option value="' . esc_attr($mode_key) . '"' . selected($automation_operating_mode, $mode_key, false) . '>' . esc_html((string) ($mode['label'] ?? ucfirst($mode_key))) . '</option>';
+        }
+        echo '</select><p class="description">Use this to set the queue pace and automation aggressiveness as a single policy. Advanced controls below can still override details if you need to tune them manually.</p>';
+        foreach ($this->automation_operating_modes() as $mode_key => $mode) {
+            echo '<div style="margin-top:4px;"><strong>' . esc_html((string) ($mode['label'] ?? ucfirst($mode_key))) . ':</strong> ' . esc_html((string) ($mode['description'] ?? '')) . '</div>';
+        }
+        echo '</td></tr>';
         echo '<tr><th scope="row"><label for="kaco_automation_enabled">Automation enabled</label></th>';
         echo '<td><label><input type="checkbox" id="kaco_automation_enabled" name="kaco_automation_enabled" value="1" ' . checked('1', $automation_enabled, false) . ' /> yes</label><p class="description">Master switch for scheduled audits and queued URL processing. Disable this if you want the plugin to run only on manual actions.</p></td></tr>';
         echo '<tr><th scope="row"><label for="kaco_automation_frequency">Automation frequency</label></th>';
@@ -1374,8 +1378,8 @@ trait KACO_Admin_UI_Trait {
         echo '</div>';
 
         echo '<div style="' . esc_attr($section_style) . '">';
-        echo '<h3 style="margin-top:0;">Taxonomy</h3>';
-        echo '<p class="description">Controls the category hierarchy and tag hygiene rules the plugin enforces.</p>';
+        echo '<h3 style="margin-top:0;">Category Mapping</h3>';
+        echo '<p class="description">Controls the internal category branches and fixed vocabularies used when the plugin assigns font categories.</p>';
         echo '<table class="form-table" role="presentation"><tbody>';
         echo '<tr><th scope="row"><label for="kaco_category_desc_min_chars">Minimum category description chars</label></th>';
         echo '<td><input type="number" min="20" max="2000" id="kaco_category_desc_min_chars" name="kaco_category_desc_min_chars" value="' . (int) $category_desc_min_chars . '" /><p class="description">Categories shorter than this are treated as needing description work.</p></td></tr>';
@@ -1384,7 +1388,7 @@ trait KACO_Admin_UI_Trait {
         echo '<tr><th scope="row"><label for="kaco_tag_min_posts_per_tag">Minimum posts per tag</label></th>';
         echo '<td><input type="number" min="1" max="100" id="kaco_tag_min_posts_per_tag" name="kaco_tag_min_posts_per_tag" value="' . (int) $tag_min_posts_per_tag . '" /><p class="description">Tags used on fewer posts than this are candidates for cleanup or merge.</p></td></tr>';
         echo '<tr><td colspan="2" style="padding:0;">';
-        echo '<details style="margin:8px 0 0 0;"><summary><strong>Advanced taxonomy mapping</strong></summary>';
+        echo '<details style="margin:8px 0 0 0;"><summary><strong>Advanced category mapping</strong></summary>';
         echo '<table class="form-table" role="presentation"><tbody>';
         echo '<tr><th scope="row"><label for="kaco_fonts_category_name">Fonts category name</label></th>';
         echo '<td><input type="text" id="kaco_fonts_category_name" name="kaco_fonts_category_name" value="' . esc_attr($fonts_category_name) . '" class="regular-text" /><p class="description">Top-level category used to scope font content.</p></td></tr>';
@@ -1464,6 +1468,8 @@ trait KACO_Admin_UI_Trait {
         update_option('kaco_editorial_style_guide', sanitize_textarea_field((string) ($_POST['kaco_editorial_style_guide'] ?? '')));
         update_option('kaco_rewrite_mode', $this->sanitize_rewrite_mode((string) ($_POST['kaco_rewrite_mode'] ?? 'replace_body')));
         update_option('kaco_automation_enabled', !empty($_POST['kaco_automation_enabled']) ? '1' : '0');
+        $automation_operating_mode = $this->sanitize_automation_operating_mode((string) ($_POST['kaco_automation_operating_mode'] ?? 'balanced'));
+        $this->apply_automation_operating_mode($automation_operating_mode);
         update_option('kaco_automation_frequency', $this->sanitize_automation_frequency((string) ($_POST['kaco_automation_frequency'] ?? 'daily')));
         $automation_post_type = sanitize_key((string) ($_POST['kaco_automation_post_type'] ?? 'post'));
         if ($automation_post_type === '' || !post_type_exists($automation_post_type)) {
@@ -1480,10 +1486,10 @@ trait KACO_Admin_UI_Trait {
         update_option('kaco_automation_apply_confidence', min(1, max(0, (float) ($_POST['kaco_automation_apply_confidence'] ?? 0.93))));
         update_option('kaco_automation_process_url_inbox', !empty($_POST['kaco_automation_process_url_inbox']) ? '1' : '0');
         update_option('kaco_automation_url_batch_size', min(100, max(1, (int) ($_POST['kaco_automation_url_batch_size'] ?? 10))));
-        update_option('kaco_automation_queue_urls_per_run', min(25, max(1, (int) ($_POST['kaco_automation_queue_urls_per_run'] ?? 1))));
-        update_option('kaco_automation_queue_delay_minutes', min(240, max(1, (int) ($_POST['kaco_automation_queue_delay_minutes'] ?? 10))));
+        update_option('kaco_automation_queue_urls_per_run', min(25, max(1, (int) ($_POST['kaco_automation_queue_urls_per_run'] ?? get_option('kaco_automation_queue_urls_per_run', 1)))));
+        update_option('kaco_automation_queue_delay_minutes', min(240, max(1, (int) ($_POST['kaco_automation_queue_delay_minutes'] ?? get_option('kaco_automation_queue_delay_minutes', 10)))));
         update_option('kaco_automation_auto_create_drafts', !empty($_POST['kaco_automation_auto_create_drafts']) ? '1' : '0');
-        update_option('kaco_automation_generator_create_confidence', min(1, max(0, (float) ($_POST['kaco_automation_generator_create_confidence'] ?? 0.90))));
+        update_option('kaco_automation_generator_create_confidence', min(1, max(0, (float) ($_POST['kaco_automation_generator_create_confidence'] ?? get_option('kaco_automation_generator_create_confidence', 0.90)))));
         update_option('kaco_automation_auto_schedule_generated_posts', !empty($_POST['kaco_automation_auto_schedule_generated_posts']) ? '1' : '0');
         update_option('kaco_automation_generated_post_spacing_hours', min(24, max(1, (int) ($_POST['kaco_automation_generated_post_spacing_hours'] ?? 3))));
         $this->ensure_automation_schedule();

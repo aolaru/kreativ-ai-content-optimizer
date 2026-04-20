@@ -13,7 +13,7 @@ final class KACO_Plugin {
     use KACO_Content_Trait;
     use KACO_Taxonomy_Tags_Trait;
 
-    const VERSION = '1.0.1';
+    const VERSION = '1.1.0';
     const TABLE = 'kaco_suggestions';
     const NONCE_ACTION = 'kaco_admin_action';
     const OPENAI_ENDPOINT = 'https://api.openai.com/v1/responses';
@@ -117,6 +117,7 @@ final class KACO_Plugin {
         add_option('kaco_generator_url_inbox', array());
         add_option('kaco_generator_automation_review', array());
         add_option('kaco_automation_enabled', '0');
+        add_option('kaco_automation_operating_mode', 'balanced');
         add_option('kaco_automation_frequency', 'daily');
         add_option('kaco_automation_post_type', 'post');
         add_option('kaco_automation_scan_limit', '50');
@@ -182,7 +183,6 @@ final class KACO_Plugin {
         $this->tab_link('create', 'New Fonts', $view);
         $this->tab_link('refresh', 'Refresh Existing', $view);
         $this->tab_link('review', 'Problems', $view);
-        $this->tab_link('taxonomy', 'Taxonomy', $view);
         $this->tab_link('settings', 'Settings', $view);
         echo '</nav>';
 
@@ -195,7 +195,7 @@ final class KACO_Plugin {
         } elseif ($view === 'review' || $view === 'exceptions' || $view === 'suggestions') {
             $this->render_review_view();
         } elseif ($view === 'taxonomy' || $view === 'cleanup' || $view === 'categories' || $view === 'tags') {
-            $this->render_taxonomy_view();
+            $this->render_dashboard_view();
         } elseif ($view === 'settings') {
             $this->render_settings_view();
         } else {
@@ -272,6 +272,72 @@ final class KACO_Plugin {
 
     private function allowed_openai_models() {
         return self::OPENAI_ALLOWED_MODELS;
+    }
+
+    private function automation_operating_modes() {
+        return array(
+            'conservative' => array(
+                'label' => 'Conservative',
+                'description' => 'Slowest and safest. Review stays heavy and automation writes very little without confirmation.',
+                'settings' => array(
+                    'kaco_automation_queue_urls_per_run' => 1,
+                    'kaco_automation_queue_delay_minutes' => 15,
+                    'kaco_automation_auto_approve' => '0',
+                    'kaco_automation_approve_confidence' => 0.90,
+                    'kaco_automation_auto_apply' => '0',
+                    'kaco_automation_apply_confidence' => 0.96,
+                    'kaco_automation_auto_create_drafts' => '1',
+                    'kaco_automation_generator_create_confidence' => 0.94,
+                    'kaco_debug_mode' => '1',
+                ),
+            ),
+            'balanced' => array(
+                'label' => 'Balanced',
+                'description' => 'Recommended default. Keeps pacing safe while still letting strong items move automatically.',
+                'settings' => array(
+                    'kaco_automation_queue_urls_per_run' => 1,
+                    'kaco_automation_queue_delay_minutes' => 10,
+                    'kaco_automation_auto_approve' => '1',
+                    'kaco_automation_approve_confidence' => 0.85,
+                    'kaco_automation_auto_apply' => '0',
+                    'kaco_automation_apply_confidence' => 0.93,
+                    'kaco_automation_auto_create_drafts' => '1',
+                    'kaco_automation_generator_create_confidence' => 0.90,
+                    'kaco_debug_mode' => '0',
+                ),
+            ),
+            'aggressive' => array(
+                'label' => 'Aggressive',
+                'description' => 'Fastest throughput. Use only when parser quality is stable and you accept more automated writes.',
+                'settings' => array(
+                    'kaco_automation_queue_urls_per_run' => 2,
+                    'kaco_automation_queue_delay_minutes' => 5,
+                    'kaco_automation_auto_approve' => '1',
+                    'kaco_automation_approve_confidence' => 0.80,
+                    'kaco_automation_auto_apply' => '1',
+                    'kaco_automation_apply_confidence' => 0.90,
+                    'kaco_automation_auto_create_drafts' => '1',
+                    'kaco_automation_generator_create_confidence' => 0.86,
+                    'kaco_debug_mode' => '0',
+                ),
+            ),
+        );
+    }
+
+    private function sanitize_automation_operating_mode($value) {
+        $value = sanitize_key((string) $value);
+        $modes = $this->automation_operating_modes();
+        return isset($modes[$value]) ? $value : 'balanced';
+    }
+
+    private function apply_automation_operating_mode($mode) {
+        $mode = $this->sanitize_automation_operating_mode($mode);
+        $modes = $this->automation_operating_modes();
+        $settings = (array) ($modes[$mode]['settings'] ?? array());
+        foreach ($settings as $option_name => $option_value) {
+            update_option($option_name, $option_value);
+        }
+        update_option('kaco_automation_operating_mode', $mode);
     }
 
     private function automation_post_type() {
