@@ -1439,6 +1439,8 @@ trait KACO_Admin_UI_Trait {
             echo '<p><strong>Last automation run</strong><br/>' . implode(' | ', $automation_bits) . '</p>';
         }
 
+        echo '<p class="description"><strong>Plugin version:</strong> ' . esc_html(self::VERSION) . '</p>';
+
         submit_button('Save Settings');
         echo '</form>';
     }

@@ -2201,6 +2201,7 @@ trait KACO_AI_Generator_Trait {
         $post_dates = array();
         $post_data = array(
             'post_type' => $this->automation_post_type(),
+            'post_author' => 1,
             'post_status' => $post_status,
             'post_title' => $title,
             'post_content' => $content,
