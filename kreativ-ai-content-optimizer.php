@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: KREATIV AI Content Optimizer
+ * Plugin Name: Kreativ Commercial Fonts
  * Description: Auditable, reversible, and safe content optimization workflows for font posts.
  * Version: 1.1.0
  * Author: KREATIV

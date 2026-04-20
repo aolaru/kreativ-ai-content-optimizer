@@ -153,8 +153,8 @@ final class KACO_Plugin {
 
     public function register_admin_menu() {
         add_menu_page(
-            'KREATIV AI Content Optimizer',
-            'KREATIV AI',
+            'Kreativ Commercial Fonts',
+            'Commercial Fonts',
             'edit_posts',
             'kaco-dashboard',
             array($this, 'render_admin_page'),
@@ -172,7 +172,7 @@ final class KACO_Plugin {
         $notice = isset($_GET['kaco_notice']) ? sanitize_text_field(wp_unslash($_GET['kaco_notice'])) : '';
 
         echo '<div class="wrap">';
-        echo '<h1>KREATIV AI Content Optimizer</h1>';
+        echo '<h1>Kreativ Commercial Fonts</h1>';
 
         if ($notice) {
             echo '<div class="notice notice-success"><p>' . esc_html($notice) . '</p></div>';
