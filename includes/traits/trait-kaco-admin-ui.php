@@ -340,7 +340,7 @@ trait KACO_Admin_UI_Trait {
         wp_nonce_field(self::NONCE_ACTION);
         echo '<table class="form-table" role="presentation"><tbody>';
         echo '<tr><th scope="row"><label for="kaco_generator_urls">Marketplace URLs</label></th>';
-        echo '<td><textarea id="kaco_generator_urls" name="kaco_generator_urls" rows="8" cols="100" class="large-text code" placeholder="https://www.myfonts.com/...&#10;https://creativemarket.com/...&#10;https://www.youworkforthem.com/font/..."></textarea>';
+        echo '<td><textarea id="kaco_generator_urls" name="kaco_generator_urls" rows="8" cols="100" class="large-text code" placeholder="https://www.myfonts.com/...&#10;https://creativemarket.com/...&#10;https://www.youworkforthem.com/font/...&#10;https://www.creativefabrica.com/product/.../ref/73113/"></textarea>';
         echo '<p class="description">One URL per line. Add them to the queue, then use <strong>Process Queue Now</strong> or let scheduled automation process them.</p></td></tr>';
         echo '</tbody></table>';
         if ($automation_enabled && $automation_process_inbox) {

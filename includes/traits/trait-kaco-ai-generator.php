@@ -329,10 +329,21 @@ trait KACO_AI_Generator_Trait {
             return '';
         }
 
-        $host = (string) wp_parse_url((string) $url, PHP_URL_HOST);
+        $parts = wp_parse_url((string) $url);
+        $host = (string) ($parts['host'] ?? '');
         $host = preg_replace('/^www\./', '', strtolower($host));
         if (strpos($host, 'youworkforthem.com') !== false) {
             $url = add_query_arg('aff', '3353', $url);
+        } elseif (strpos($host, 'creativefabrica.com') !== false) {
+            $path = (string) ($parts['path'] ?? '');
+            $path = preg_replace('#/ref/\d+/?$#i', '/', $path);
+            if (preg_match('#^/product/[^/]+/?$#i', $path)) {
+                $path = trailingslashit($path) . 'ref/73113/';
+                $url = (string) ($parts['scheme'] ?? 'https') . '://' . (string) ($parts['host'] ?? '') . $path;
+                if (!empty($parts['query'])) {
+                    $url .= '?' . (string) $parts['query'];
+                }
+            }
         }
 
         return esc_url_raw((string) $url);
@@ -1538,6 +1549,8 @@ trait KACO_AI_Generator_Trait {
             $specimen_image = $this->extract_creative_market_product_image($html);
         } elseif ($marketplace === 'YouWorkForThem') {
             $specimen_image = $this->extract_youworkforthem_product_image($html);
+        } elseif ($marketplace === 'Creative Fabrica') {
+            $specimen_image = $this->extract_creative_fabrica_product_image($html);
         }
 
         return array(
@@ -1575,6 +1588,12 @@ trait KACO_AI_Generator_Trait {
 
         if ($marketplace === 'YouWorkForThem') {
             if ((strpos($blob, 'youworkforthem') !== false || strpos($blob, 'you work for them') !== false) && (strpos($blob, 'font') !== false || strpos($blob, 'typeface') !== false)) {
+                return true;
+            }
+        }
+
+        if ($marketplace === 'Creative Fabrica') {
+            if (strpos($blob, 'creative fabrica') !== false && (strpos($blob, 'font') !== false || strpos($blob, 'typeface') !== false || strpos($blob, 'designer') !== false)) {
                 return true;
             }
         }
@@ -1646,6 +1665,9 @@ trait KACO_AI_Generator_Trait {
         }
         if ($marketplace === 'YouWorkForThem') {
             return $this->extract_youworkforthem_source_fields($url, $source_context);
+        }
+        if ($marketplace === 'Creative Fabrica') {
+            return $this->extract_creative_fabrica_source_fields($url, $source_context);
         }
         return array(
             'font_name' => '',
@@ -1838,6 +1860,77 @@ trait KACO_AI_Generator_Trait {
         if (empty($fields['designer_names']) && $fields['foundry_name'] !== '') {
             $fields['designer_names'] = array($fields['foundry_name']);
             $fields['designer_evidence'] = 'Publisher matched the source page byline.';
+        }
+
+        $fields['font_name'] = $this->normalize_marketplace_label_case((string) $fields['font_name'], $source_context);
+        $fields['foundry_name'] = $this->normalize_marketplace_label_case((string) $fields['foundry_name'], $source_context);
+        $fields['designer_names'] = array_values(array_filter(array_map(function($name) use ($source_context) {
+            return $this->normalize_marketplace_label_case((string) $name, $source_context);
+        }, (array) $fields['designer_names'])));
+
+        return $fields;
+    }
+
+    private function extract_creative_fabrica_source_fields($url, $source_context) {
+        $fields = array(
+            'font_name' => '',
+            'foundry_name' => '',
+            'designer_names' => array(),
+            'designer_evidence' => '',
+        );
+
+        $path = (string) wp_parse_url((string) $url, PHP_URL_PATH);
+        $segments = array_values(array_filter(explode('/', trim($path, '/'))));
+        if (count($segments) >= 2 && strtolower((string) $segments[0]) === 'product') {
+            $fields['font_name'] = $this->humanize_slug((string) $segments[1]);
+        }
+
+        $title_blob = trim(implode(' | ', array_filter(array(
+            (string) ($source_context['title'] ?? ''),
+            (string) ($source_context['og_title'] ?? ''),
+        ))));
+        if ($title_blob !== '') {
+            if (preg_match('/^\s*(.+?)\s+Font\s+by\s+(.+?)(?:\s*[·|-]\s*Creative\s+Fabrica|\s*\|\s*Creative\s+Fabrica|\s*$)/i', $title_blob, $matches)) {
+                $fields['font_name'] = trim((string) $matches[1]);
+                $fields['foundry_name'] = trim((string) $matches[2]);
+                $fields['designer_names'] = $this->sanitize_name_list($matches[2]);
+                $fields['designer_evidence'] = 'Creative Fabrica title byline: ' . trim((string) $matches[2]);
+            } elseif (preg_match('/^\s*(.+?)\s*(?:Font|Typeface)(?:\s*[·|-]\s*Creative\s+Fabrica|\s*\|\s*Creative\s+Fabrica|\s*$)/i', $title_blob, $matches)) {
+                $candidate = trim((string) $matches[1]);
+                if ($candidate !== '' && stripos($candidate, 'creative fabrica') === false) {
+                    $fields['font_name'] = $candidate;
+                }
+            }
+        }
+
+        $text = trim(implode(' ', array_filter(array(
+            (string) ($source_context['description'] ?? ''),
+            (string) ($source_context['text_excerpt'] ?? ''),
+        ))));
+        if ($text !== '') {
+            if (empty($fields['designer_names']) && preg_match('/about\s+.+?\s+font.*?(?:by|from)\s+([A-Z][A-Za-z0-9 .,&\'-]+?)(?:\s{2,}|\.|,|\||$)/i', $text, $matches)) {
+                $fields['designer_names'] = $this->sanitize_name_list($matches[1]);
+                $fields['designer_evidence'] = 'Creative Fabrica about section: ' . trim((string) $matches[1]);
+            }
+            if ($fields['foundry_name'] === '' && preg_match('/view profile\s+follow designer.*?([A-Z][A-Za-z0-9 .,&\'-]+?)\s+download\s+\d+/is', $text, $matches)) {
+                $fields['foundry_name'] = trim((string) $matches[1]);
+            }
+            if (empty($fields['designer_names']) && preg_match('/follow designer.*?([A-Z][A-Za-z0-9 .,&\'-]+?)\s+download\s+\d+/is', $text, $matches)) {
+                $fields['designer_names'] = $this->sanitize_name_list($matches[1]);
+                $fields['designer_evidence'] = 'Creative Fabrica designer profile: ' . trim((string) $matches[1]);
+            }
+            if (empty($fields['designer_names']) && preg_match('/image:\s*.+?\s+font\s+by\s+([A-Z][A-Za-z0-9 .,&\'-]+?)\s+\d/i', $text, $matches)) {
+                $fields['designer_names'] = $this->sanitize_name_list($matches[1]);
+                $fields['designer_evidence'] = 'Creative Fabrica gallery alt text: ' . trim((string) $matches[1]);
+            }
+        }
+
+        if ($fields['foundry_name'] === '' && !empty($fields['designer_names'][0])) {
+            $fields['foundry_name'] = (string) $fields['designer_names'][0];
+        }
+        if (empty($fields['designer_names']) && $fields['foundry_name'] !== '') {
+            $fields['designer_names'] = array($fields['foundry_name']);
+            $fields['designer_evidence'] = 'Seller matched the Creative Fabrica page byline.';
         }
 
         $fields['font_name'] = $this->normalize_marketplace_label_case((string) $fields['font_name'], $source_context);
@@ -2044,6 +2137,71 @@ trait KACO_AI_Generator_Trait {
         $best_score = -100;
         foreach ((array) array_unique($candidates) as $candidate) {
             $score = $this->youworkforthem_image_score($candidate);
+            if ($score > $best_score) {
+                $best = $candidate;
+                $best_score = $score;
+            }
+        }
+
+        return $best_score >= 3 ? $best : '';
+    }
+
+    private function creative_fabrica_image_score($url) {
+        $url = strtolower((string) $url);
+        if ($url === '') {
+            return -100;
+        }
+
+        $score = 0;
+        if (strpos($url, 'creativefabrica') !== false) {
+            $score += 5;
+        }
+        if (preg_match('/\.(?:jpg|jpeg|png|webp)(?:\?|$)/i', $url)) {
+            $score += 3;
+        }
+        if (strpos($url, 'product') !== false || strpos($url, 'font') !== false || strpos($url, 'preview') !== false || strpos($url, 'hero') !== false || strpos($url, 'cover') !== false || strpos($url, 'specimen') !== false) {
+            $score += 3;
+        }
+        if (strpos($url, 'avatar') !== false || strpos($url, 'profile') !== false || strpos($url, 'icon') !== false || strpos($url, 'logo') !== false || strpos($url, 'favicon') !== false) {
+            $score -= 6;
+        }
+
+        return $score;
+    }
+
+    private function extract_creative_fabrica_product_image($html) {
+        $html = (string) $html;
+        if ($html === '') {
+            return '';
+        }
+
+        $candidates = array();
+        $patterns = array(
+            '#https://[^"\']*creativefabrica[^"\']+\.(?:jpg|jpeg|png|webp)(?:\?[^"\']*)?#i',
+            '#https://[^"\']*/wp-content/uploads/[^"\']+\.(?:jpg|jpeg|png|webp)(?:\?[^"\']*)?#i',
+        );
+
+        foreach ($patterns as $pattern) {
+            if (preg_match_all($pattern, $html, $matches)) {
+                foreach ((array) ($matches[0] ?? array()) as $candidate) {
+                    $candidate = esc_url_raw(html_entity_decode((string) $candidate, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+                    if ($candidate !== '') {
+                        $candidates[] = $candidate;
+                    }
+                }
+            }
+        }
+
+        foreach ((array) array_unique($candidates) as $candidate) {
+            if ($this->creative_fabrica_image_score($candidate) >= 8) {
+                return $candidate;
+            }
+        }
+
+        $best = '';
+        $best_score = -100;
+        foreach ((array) array_unique($candidates) as $candidate) {
+            $score = $this->creative_fabrica_image_score($candidate);
             if ($score > $best_score) {
                 $best = $candidate;
                 $best_score = $score;
