@@ -315,12 +315,27 @@ trait KACO_AI_Generator_Trait {
         $urls = array_values(array_filter(array_map('trim', (array) $urls)));
         $normalized = array();
         foreach ($urls as $url) {
-            $url = esc_url_raw((string) $url);
+            $url = $this->normalize_generator_source_url($url);
             if ($url !== '' && !in_array($url, $normalized, true)) {
                 $normalized[] = $url;
             }
         }
         return $normalized;
+    }
+
+    private function normalize_generator_source_url($url) {
+        $url = esc_url_raw((string) $url);
+        if ($url === '') {
+            return '';
+        }
+
+        $host = (string) wp_parse_url((string) $url, PHP_URL_HOST);
+        $host = preg_replace('/^www\./', '', strtolower($host));
+        if (strpos($host, 'youworkforthem.com') !== false) {
+            $url = add_query_arg('aff', '3353', $url);
+        }
+
+        return esc_url_raw((string) $url);
     }
 
     private function request_generator_queue_preview($url) {
@@ -403,7 +418,7 @@ trait KACO_AI_Generator_Trait {
 
         return array(
             'preview_source' => 'automation',
-            'url' => esc_url_raw($url),
+            'url' => $this->normalize_generator_source_url($url),
             'title' => $title,
             'image_url' => esc_url_raw((string) ($source_context['image_url'] ?? '')),
             'designer_names' => $designer_names,
@@ -430,7 +445,7 @@ trait KACO_AI_Generator_Trait {
         $editorial_style_guide = (string) get_option('kaco_editorial_style_guide', '');
         $mode = $mode === 'fast' ? 'fast' : 'full';
 
-        $url = esc_url_raw((string) $url);
+        $url = $this->normalize_generator_source_url($url);
         if ($api_key === '' || $endpoint === '' || $model === '' || $url === '') {
             return $this->build_error_result('missing_generator_config', 'OpenAI configuration or source URL is missing.', array(
                 'stage' => 'config',
@@ -721,7 +736,7 @@ trait KACO_AI_Generator_Trait {
         }
 
         $result = array(
-            'url' => esc_url_raw($url),
+            'url' => $this->normalize_generator_source_url($url),
             'title' => $title,
             'image_url' => esc_url_raw((string) ($payload['image_url'] ?? ($source_context['image_url'] ?? ''))),
             'designer_names' => $designer_names,
@@ -751,7 +766,7 @@ trait KACO_AI_Generator_Trait {
             'content' => $this->build_generated_font_content(array(
                 'title' => $title,
                 'font_name' => $font_name,
-                'url' => esc_url_raw($url),
+                'url' => $this->normalize_generator_source_url($url),
                 'image_url' => esc_url_raw((string) ($payload['image_url'] ?? ($source_context['image_url'] ?? ''))),
                 'designer_names' => $designer_names,
                 'foundry_name' => $foundry_name,
@@ -1466,7 +1481,7 @@ trait KACO_AI_Generator_Trait {
     }
 
     private function fetch_source_context($url) {
-        $url = esc_url_raw((string) $url);
+        $url = $this->normalize_generator_source_url($url);
         if ($url === '') {
             return $this->build_error_result('invalid_source_url', 'Source URL is empty or invalid.', array(
                 'stage' => 'source_fetch',
@@ -1521,6 +1536,8 @@ trait KACO_AI_Generator_Trait {
             $specimen_image = $this->extract_myfonts_specimen_image($html);
         } elseif ($marketplace === 'Creative Market') {
             $specimen_image = $this->extract_creative_market_product_image($html);
+        } elseif ($marketplace === 'YouWorkForThem') {
+            $specimen_image = $this->extract_youworkforthem_product_image($html);
         }
 
         return array(
@@ -1552,6 +1569,12 @@ trait KACO_AI_Generator_Trait {
 
         if ($marketplace === 'Creative Market') {
             if (strpos($blob, 'creative market') !== false && (strpos($blob, 'font') !== false || strpos($blob, 'typeface') !== false)) {
+                return true;
+            }
+        }
+
+        if ($marketplace === 'YouWorkForThem') {
+            if ((strpos($blob, 'youworkforthem') !== false || strpos($blob, 'you work for them') !== false) && (strpos($blob, 'font') !== false || strpos($blob, 'typeface') !== false)) {
                 return true;
             }
         }
@@ -1620,6 +1643,9 @@ trait KACO_AI_Generator_Trait {
         }
         if ($marketplace === 'Creative Market') {
             return $this->extract_creative_market_source_fields($url, $source_context);
+        }
+        if ($marketplace === 'YouWorkForThem') {
+            return $this->extract_youworkforthem_source_fields($url, $source_context);
         }
         return array(
             'font_name' => '',
@@ -1745,6 +1771,73 @@ trait KACO_AI_Generator_Trait {
         if (empty($fields['designer_names']) && $fields['foundry_name'] !== '') {
             $fields['designer_names'] = array($fields['foundry_name']);
             $fields['designer_evidence'] = 'Marketplace seller matched the source page byline.';
+        }
+
+        $fields['font_name'] = $this->normalize_marketplace_label_case((string) $fields['font_name'], $source_context);
+        $fields['foundry_name'] = $this->normalize_marketplace_label_case((string) $fields['foundry_name'], $source_context);
+        $fields['designer_names'] = array_values(array_filter(array_map(function($name) use ($source_context) {
+            return $this->normalize_marketplace_label_case((string) $name, $source_context);
+        }, (array) $fields['designer_names'])));
+
+        return $fields;
+    }
+
+    private function extract_youworkforthem_source_fields($url, $source_context) {
+        $fields = array(
+            'font_name' => '',
+            'foundry_name' => '',
+            'designer_names' => array(),
+            'designer_evidence' => '',
+        );
+
+        $path = (string) wp_parse_url((string) $url, PHP_URL_PATH);
+        $segments = array_values(array_filter(explode('/', trim($path, '/'))));
+        if (count($segments) >= 3 && strtolower((string) $segments[0]) === 'font') {
+            $fields['font_name'] = $this->humanize_slug((string) $segments[2]);
+        }
+
+        $title_blob = trim(implode(' | ', array_filter(array(
+            (string) ($source_context['title'] ?? ''),
+            (string) ($source_context['og_title'] ?? ''),
+        ))));
+        if ($title_blob !== '') {
+            if (preg_match('/^\s*(.+?)\s+by\s+(.+?)(?:\s*[-|]\s*YouWorkForThem|\s*\|\s*YouWorkForThem|\s*$)/i', $title_blob, $matches)) {
+                $fields['font_name'] = trim((string) $matches[1]);
+                $fields['foundry_name'] = trim((string) $matches[2]);
+            } elseif (preg_match('/^\s*(.+?)\s+font\s+by\s+(.+?)(?:\s*[-|]\s*YouWorkForThem|\s*\|\s*YouWorkForThem|\s*$)/i', $title_blob, $matches)) {
+                $fields['font_name'] = trim((string) $matches[1]);
+                $fields['foundry_name'] = trim((string) $matches[2]);
+            } elseif (preg_match('/^\s*(.+?)\s*(?:[-|]\s*YouWorkForThem|\|\s*YouWorkForThem|\s*$)/i', $title_blob, $matches)) {
+                $candidate = trim((string) $matches[1]);
+                if ($candidate !== '' && stripos($candidate, 'youworkforthem') === false) {
+                    $fields['font_name'] = $candidate;
+                }
+            }
+        }
+
+        $text = trim(implode(' ', array_filter(array(
+            (string) ($source_context['description'] ?? ''),
+            (string) ($source_context['text_excerpt'] ?? ''),
+        ))));
+        if ($text !== '') {
+            if (preg_match('/(?:font|typeface)\s+by\s+([A-Z][A-Za-z0-9 .,&\'-]+?)(?:\s+on\s+YouWorkForThem|\.|,|\||$)/i', $text, $matches)) {
+                $fields['foundry_name'] = trim((string) $matches[1]);
+            }
+            if (preg_match('/published by\s+([A-Z][A-Za-z0-9 .,&\'-]+?)(?:\s+on\s+YouWorkForThem|\.|,|\||$)/i', $text, $matches)) {
+                $fields['foundry_name'] = trim((string) $matches[1]);
+            }
+            if (preg_match('/designed by\s+([^.;|]+?)(?:\s+and\s+published by|\s+published by|[.;|]|$)/i', $text, $matches)) {
+                $fields['designer_names'] = $this->sanitize_name_list($matches[1]);
+                $fields['designer_evidence'] = 'Designed by ' . trim((string) $matches[1]);
+            } elseif (preg_match('/designer\s*:\s*([^.;|]+?)(?:\s+publisher\s*:|\s+foundry\s*:|[.;|]|$)/i', $text, $matches)) {
+                $fields['designer_names'] = $this->sanitize_name_list($matches[1]);
+                $fields['designer_evidence'] = 'Designer: ' . trim((string) $matches[1]);
+            }
+        }
+
+        if (empty($fields['designer_names']) && $fields['foundry_name'] !== '') {
+            $fields['designer_names'] = array($fields['foundry_name']);
+            $fields['designer_evidence'] = 'Publisher matched the source page byline.';
         }
 
         $fields['font_name'] = $this->normalize_marketplace_label_case((string) $fields['font_name'], $source_context);
@@ -1886,6 +1979,71 @@ trait KACO_AI_Generator_Trait {
         $best_score = -100;
         foreach ((array) array_unique($candidates) as $candidate) {
             $score = $this->creative_market_image_score($candidate);
+            if ($score > $best_score) {
+                $best = $candidate;
+                $best_score = $score;
+            }
+        }
+
+        return $best_score >= 3 ? $best : '';
+    }
+
+    private function youworkforthem_image_score($url) {
+        $url = strtolower((string) $url);
+        if ($url === '') {
+            return -100;
+        }
+
+        $score = 0;
+        if (strpos($url, 'youworkforthem') !== false || strpos($url, 'ywft') !== false) {
+            $score += 5;
+        }
+        if (preg_match('/\.(?:jpg|jpeg|png|webp)(?:\?|$)/i', $url)) {
+            $score += 3;
+        }
+        if (strpos($url, 'font') !== false || strpos($url, 'product') !== false || strpos($url, 'hero') !== false || strpos($url, 'preview') !== false || strpos($url, 'cover') !== false) {
+            $score += 3;
+        }
+        if (strpos($url, 'logo') !== false || strpos($url, 'icon') !== false || strpos($url, 'avatar') !== false || strpos($url, 'profile') !== false) {
+            $score -= 6;
+        }
+
+        return $score;
+    }
+
+    private function extract_youworkforthem_product_image($html) {
+        $html = (string) $html;
+        if ($html === '') {
+            return '';
+        }
+
+        $candidates = array();
+        $patterns = array(
+            '#https://[^"\']*youworkforthem[^"\']+\.(?:jpg|jpeg|png|webp)(?:\?[^"\']*)?#i',
+            '#https://[^"\']*ywft[^"\']+\.(?:jpg|jpeg|png|webp)(?:\?[^"\']*)?#i',
+        );
+
+        foreach ($patterns as $pattern) {
+            if (preg_match_all($pattern, $html, $matches)) {
+                foreach ((array) ($matches[0] ?? array()) as $candidate) {
+                    $candidate = esc_url_raw(html_entity_decode((string) $candidate, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+                    if ($candidate !== '') {
+                        $candidates[] = $candidate;
+                    }
+                }
+            }
+        }
+
+        foreach ((array) array_unique($candidates) as $candidate) {
+            if ($this->youworkforthem_image_score($candidate) >= 8) {
+                return $candidate;
+            }
+        }
+
+        $best = '';
+        $best_score = -100;
+        foreach ((array) array_unique($candidates) as $candidate) {
+            $score = $this->youworkforthem_image_score($candidate);
             if ($score > $best_score) {
                 $best = $candidate;
                 $best_score = $score;
@@ -2165,7 +2323,7 @@ trait KACO_AI_Generator_Trait {
         if ($summary_excerpt === '') {
             $summary_excerpt = $this->build_generated_summary_excerpt($preview);
         }
-        $source_url = esc_url_raw((string) ($preview['url'] ?? ''));
+        $source_url = $this->normalize_generator_source_url((string) ($preview['url'] ?? ''));
         if ($title === '' && $source_url !== '') {
             $fallback_name = $this->infer_font_name_from_source_url($source_url);
             if ($fallback_name !== '') {
@@ -2554,7 +2712,7 @@ trait KACO_AI_Generator_Trait {
     }
 
     private function find_existing_generated_post_by_source_url($source_url) {
-        $source_url = esc_url_raw((string) $source_url);
+        $source_url = $this->normalize_generator_source_url((string) $source_url);
         if ($source_url === '') {
             return 0;
         }
@@ -2829,6 +2987,9 @@ trait KACO_AI_Generator_Trait {
         }
         if (strpos($host, 'creativemarket.com') !== false) {
             return 'Creative Market';
+        }
+        if (strpos($host, 'youworkforthem.com') !== false) {
+            return 'YouWorkForThem';
         }
         if (strpos($host, 'creativefabrica.com') !== false) {
             return 'Creative Fabrica';
