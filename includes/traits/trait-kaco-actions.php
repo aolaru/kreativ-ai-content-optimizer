@@ -242,38 +242,6 @@ trait KACO_Actions_Trait {
         $this->redirect_with_notice('Hierarchy cleanup batch rolled back.', 'cleanup');
     }
 
-    public function handle_run_audit() {
-        $this->require_admin_request();
-
-        $preset = sanitize_key((string) ($_POST['kaco_audit_preset'] ?? 'custom'));
-        $issue_filter = sanitize_key((string) ($_POST['kaco_issue_filter'] ?? 'all'));
-        $only_missing = !empty($_POST['kaco_only_missing']);
-        if ($preset !== '' && $preset !== 'custom') {
-            $audit_args = $this->apply_audit_preset(array(
-                'issue_filter' => $issue_filter,
-                'only_missing' => $only_missing,
-            ), $preset);
-            $issue_filter = sanitize_key((string) ($audit_args['issue_filter'] ?? $issue_filter));
-            $only_missing = !empty($audit_args['only_missing']);
-        }
-
-        $summary = $this->run_audit_job(array(
-            'post_type' => sanitize_key($_POST['kaco_post_type'] ?? 'post'),
-            'limit' => min(500, max(1, (int) ($_POST['kaco_limit'] ?? 100))),
-            'only_missing' => $only_missing,
-            'scan_all' => !empty($_POST['kaco_scan_all']),
-            'fonts_only' => !empty($_POST['kaco_fonts_only']),
-            'dry_run' => !empty($_POST['kaco_dry_run']),
-            'issue_filter' => $issue_filter,
-        ));
-        update_option('kaco_last_audit_summary', $summary, false);
-
-        $message = !empty($summary['dry_run'])
-            ? "Dry-run audit complete. Scanned {$summary['scanned']} posts. Matched {$summary['matched']} posts. Queued 0 suggestions."
-            : "Audit complete. Scanned {$summary['scanned']} posts. Matched {$summary['matched']} posts. Queued {$summary['queued']} suggestions.";
-        $this->redirect_with_notice($message, 'audit');
-    }
-
     public function handle_queue_refresh_urls() {
         $this->require_admin_request();
 

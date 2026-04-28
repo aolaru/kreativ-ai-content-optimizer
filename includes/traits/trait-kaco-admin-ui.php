@@ -50,7 +50,7 @@ trait KACO_Admin_UI_Trait {
         );
         $this->render_primary_action_card(
             'Run Refresh',
-            'Use Refresh Existing to scan older posts and create improvement suggestions. It does not rewrite content immediately.',
+            'Use Refresh Existing to queue specific posts you want to revisit, then review or apply the resulting updates.',
             'Open Refresh Existing',
             admin_url('admin.php?page=kaco-dashboard&view=refresh')
         );
@@ -66,7 +66,7 @@ trait KACO_Admin_UI_Trait {
             echo '</form>';
         }
         echo '<a class="button" href="' . esc_url(admin_url('admin.php?page=kaco-dashboard&view=review')) . '">Open Problems</a>';
-        echo '<a class="button" href="' . esc_url(admin_url('admin.php?page=kaco-dashboard&view=refresh')) . '">Run Refresh</a>';
+        echo '<a class="button" href="' . esc_url(admin_url('admin.php?page=kaco-dashboard&view=refresh')) . '">Open Refresh Existing</a>';
         echo '</div>';
 
         echo '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:20px 0;">';
@@ -136,7 +136,7 @@ trait KACO_Admin_UI_Trait {
         $approved = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table} WHERE status = 'approved'");
         $applied = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table} WHERE status = 'applied'");
         echo '<h2>Refresh existing posts</h2>';
-        echo '<p>Use this lane for older content. Run a scan, generate suggestions, then move the uncertain items into Problems and apply safe approved updates from there.</p>';
+        echo '<p>Use this lane for older content you choose explicitly. Queue specific posts, let automation prepare the suggestions, then move uncertain items into Problems and apply safe approved updates from there.</p>';
 
         echo '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:18px 0;">';
         $this->render_dashboard_card('Refresh Existing', 'Pending suggestions', (string) $pending, 'View lane state', admin_url('admin.php?page=kaco-dashboard&view=refresh'));
@@ -146,14 +146,15 @@ trait KACO_Admin_UI_Trait {
         echo '</div>';
 
         echo '<div style="margin:16px 0 22px 0;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">';
-        echo '<a class="button button-primary" href="#kaco-refresh-scan">Run Refresh Scan</a>';
+        echo '<a class="button button-primary" href="#kaco-refresh-queue">Queue Selected Posts</a>';
         echo '<a class="button" href="' . esc_url(admin_url('admin.php?page=kaco-dashboard&view=review&review_filter=needs_review')) . '">Open Needs Review</a>';
         echo '<a class="button" href="' . esc_url(admin_url('admin.php?page=kaco-dashboard&view=review&review_filter=approved')) . '">Open Ready to Apply</a>';
         echo '</div>';
 
+        echo '<div id="kaco-refresh-queue"></div>';
         echo '<div style="background:#fff;border:1px solid #dcdcde;padding:16px;margin:0 0 24px 0;">';
         echo '<h3 style="margin-top:0;">Queue specific posts</h3>';
-        echo '<p class="description" style="margin-top:0;">Paste up to 10 existing post URLs to queue refresh suggestions for exactly those posts. Use this for operator-picked refresh work. Use the scan below to discover broader candidates.</p>';
+        echo '<p class="description" style="margin-top:0;">Paste up to 10 existing post URLs to queue refresh suggestions for exactly those posts. This is the only manual refresh intake now.</p>';
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
         wp_nonce_field(self::NONCE_ACTION);
         echo '<input type="hidden" name="action" value="kaco_queue_refresh_urls" />';
@@ -165,8 +166,6 @@ trait KACO_Admin_UI_Trait {
         submit_button('Queue Selected Posts');
         echo '</form>';
         echo '</div>';
-
-        $this->render_audit_view();
 
         $automation_last_run = get_option('kaco_automation_last_run', array());
         if (!empty($automation_last_run) && is_array($automation_last_run)) {
@@ -266,109 +265,6 @@ trait KACO_Admin_UI_Trait {
             echo '</div>';
         }
         echo '</div>';
-    }
-
-    private function render_audit_view() {
-        $last_summary = get_option('kaco_last_audit_summary', array());
-        $default_post_type = sanitize_key((string) get_option('kaco_automation_post_type', 'post'));
-
-        echo '<div id="kaco-refresh-scan"></div>';
-        echo '<h2>Run refresh scan</h2>';
-        echo '<p>Start with a preset. The scan looks for hierarchy gaps, thin or stale content, low internal linking, duplicate risk, and missing category descriptions. It creates pending suggestions only.</p>';
-
-        if (!empty($last_summary) && is_array($last_summary)) {
-            echo '<div class="notice notice-info inline"><p><strong>Last audit summary</strong><br/>';
-            echo 'Scanned: ' . (int) ($last_summary['scanned'] ?? 0);
-            echo ' | Matched: ' . (int) ($last_summary['matched'] ?? 0);
-            echo ' | Queued: ' . (int) ($last_summary['queued'] ?? 0);
-            echo ' | Mode: ' . (!empty($last_summary['dry_run']) ? 'Dry Run' : 'Queue');
-            echo ' | Filter: ' . esc_html((string) ($last_summary['issue_filter'] ?? 'all'));
-            echo '</p>';
-            $next_action_bits = array();
-            if ((int) ($last_summary['queued'] ?? 0) > 0) {
-                $next_action_bits[] = '<a href="' . esc_url(admin_url('admin.php?page=kaco-dashboard&view=review&review_filter=needs_review')) . '">Review uncertain suggestions</a>';
-                $next_action_bits[] = '<a href="' . esc_url(admin_url('admin.php?page=kaco-dashboard&view=review&review_filter=approved')) . '">Apply approved updates</a>';
-            } elseif (!empty($last_summary['dry_run']) && (int) ($last_summary['matched'] ?? 0) > 0) {
-                $next_action_bits[] = 'Run the scan again without dry run to queue these matches';
-            } else {
-                $next_action_bits[] = 'Choose a different preset or widen the batch if you expected more matches';
-            }
-            echo '<p><strong>Next step:</strong> ' . implode(' | ', $next_action_bits) . '</p>';
-            if (!empty($last_summary['reason_totals']) && is_array($last_summary['reason_totals'])) {
-                $reason_bits = array();
-                foreach ($last_summary['reason_totals'] as $label => $count) {
-                    $reason_bits[] = $label . ' (' . (int) $count . ')';
-                }
-                echo '<p><strong>Reasons:</strong> ' . esc_html(implode(' | ', $reason_bits)) . '</p>';
-            }
-            if (!empty($last_summary['top_rows']) && is_array($last_summary['top_rows'])) {
-                echo '<p><strong>Top matches:</strong></p><ul>';
-                foreach ($last_summary['top_rows'] as $row) {
-                    echo '<li>' . esc_html((string) ($row['title'] ?? ('Post #' . (int) ($row['post_id'] ?? 0)))) . ' | priority ' . (int) ($row['priority_score'] ?? 0) . ' | action: ' . esc_html((string) ($row['suggested_action'] ?? 'Manual review')) . ' | ' . esc_html(implode(', ', (array) ($row['reason_badges'] ?? array()))) . ' | ' . esc_html((string) ($row['current_hierarchy_preview'] ?? '')) . '</li>';
-                }
-                echo '</ul>';
-            }
-            echo '</div>';
-        }
-
-        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
-        wp_nonce_field(self::NONCE_ACTION);
-        echo '<input type="hidden" name="action" value="kaco_run_audit" />';
-
-        echo '<div style="background:#f6f7f7;border-left:4px solid #2271b1;padding:10px 12px;margin:0 0 16px 0;">';
-        echo '<strong>Recommended starting point</strong><br/>';
-        echo 'Use <strong>Missing hierarchy</strong> when cleaning older font posts, <strong>Stale content</strong> when refreshing aged copy, and <strong>High priority only</strong> when you want the strongest candidates first.';
-        echo '</div>';
-
-        echo '<table class="form-table" role="presentation"><tbody>';
-        echo '<tr><th scope="row"><label for="kaco_audit_preset">Audit preset</label></th>';
-        echo '<td><select id="kaco_audit_preset" name="kaco_audit_preset">';
-        foreach (array(
-            'custom' => 'Custom',
-            'missing_hierarchy' => 'Missing hierarchy',
-            'thin' => 'Thin content',
-            'stale' => 'Stale content',
-            'high_priority' => 'High priority only',
-        ) as $value => $label) {
-            echo '<option value="' . esc_attr($value) . '">' . esc_html($label) . '</option>';
-        }
-        echo '</select> <p class="description">Use a preset for fast audits, or keep Custom to use the form values directly.</p></td></tr>';
-        echo '<tr><th scope="row"><label for="kaco_limit">Batch size</label></th>';
-        echo '<td><input type="number" min="1" max="500" id="kaco_limit" name="kaco_limit" value="100" /> <p class="description">Use smaller batches for tighter review cycles and larger batches for broad cleanup sweeps.</p></td></tr>';
-
-        echo '<tr><th scope="row"><label for="kaco_only_missing">Only posts with missing font hierarchy</label></th>';
-        echo '<td><label><input type="checkbox" id="kaco_only_missing" name="kaco_only_missing" value="1" checked="checked" /> yes</label> <p class="description">Recommended for hierarchy cleanups. Turn this off if you want broader content-refresh scans.</p></td></tr>';
-        echo '<tr><th scope="row"><label for="kaco_fonts_only">Fonts posts only</label></th>';
-        echo '<td><label><input type="checkbox" id="kaco_fonts_only" name="kaco_fonts_only" value="1" checked="checked" /> yes</label> <p class="description">Recommended. Keeps the scan focused on font posts instead of the whole archive.</p></td></tr>';
-        echo '</tbody></table>';
-
-        echo '<details style="margin:16px 0;"><summary><strong>Advanced scan controls</strong></summary>';
-        echo '<table class="form-table" role="presentation"><tbody>';
-        echo '<tr><th scope="row"><label for="kaco_post_type">Post type</label></th>';
-        echo '<td><input type="text" id="kaco_post_type" name="kaco_post_type" value="' . esc_attr($default_post_type) . '" class="regular-text" /><p class="description">Defaults to the automation post type configured in Settings.</p></td></tr>';
-        echo '<tr><th scope="row"><label for="kaco_scan_all">Scan all matching posts</label></th>';
-        echo '<td><label><input type="checkbox" id="kaco_scan_all" name="kaco_scan_all" value="1" /> yes (ignores batch size)</label></td></tr>';
-        echo '<tr><th scope="row"><label for="kaco_issue_filter">Issue filter</label></th>';
-        echo '<td><select id="kaco_issue_filter" name="kaco_issue_filter">';
-        foreach (array(
-            'all' => 'All issues',
-            'missing_hierarchy' => 'Missing hierarchy',
-            'thin' => 'Thin content',
-            'stale' => 'Stale content',
-            'low_links' => 'Low internal links',
-            'duplicate' => 'Duplicate risk',
-            'category_desc' => 'Category description gaps',
-        ) as $value => $label) {
-            echo '<option value="' . esc_attr($value) . '">' . esc_html($label) . '</option>';
-        }
-        echo '</select><p class="description">Use this only when the preset is too broad and you need to isolate one issue type.</p></td></tr>';
-        echo '<tr><th scope="row"><label for="kaco_dry_run">Dry run only</label></th>';
-        echo '<td><label><input type="checkbox" id="kaco_dry_run" name="kaco_dry_run" value="1" /> yes, summarize matches without queueing suggestions</label></td></tr>';
-        echo '</tbody></table>';
-        echo '</details>';
-
-        submit_button('Run Refresh Scan');
-        echo '</form>';
     }
 
     private function render_generator_view() {
