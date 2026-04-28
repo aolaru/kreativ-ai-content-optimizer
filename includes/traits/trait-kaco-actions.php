@@ -274,6 +274,57 @@ trait KACO_Actions_Trait {
         $this->redirect_with_notice($message, 'audit');
     }
 
+    public function handle_queue_refresh_urls() {
+        $this->require_admin_request();
+
+        $raw_urls = (string) wp_unslash($_POST['kaco_refresh_urls'] ?? '');
+        $urls = $this->normalize_refresh_candidate_urls($raw_urls);
+        if (empty($urls)) {
+            $this->redirect_with_notice('No existing post URLs were provided for refresh.', 'refresh');
+        }
+
+        $post_ids = array();
+        $unmatched = array();
+        foreach ($urls as $url) {
+            $post_id = $this->resolve_refresh_post_id_from_url($url);
+            if ($post_id <= 0) {
+                $unmatched[] = $url;
+                continue;
+            }
+            $post_ids[] = (int) $post_id;
+        }
+        $post_ids = array_values(array_unique(array_filter($post_ids)));
+        if (empty($post_ids)) {
+            $message = 'None of the submitted URLs matched existing posts.';
+            if (!empty($unmatched)) {
+                $message .= ' Unmatched: ' . implode(' | ', array_slice($unmatched, 0, 3));
+                if (count($unmatched) > 3) {
+                    $message .= ' ...';
+                }
+            }
+            $this->redirect_with_notice($message, 'refresh');
+        }
+
+        $summary = $this->run_audit_job(array(
+            'post_type' => sanitize_key((string) get_option('kaco_automation_post_type', 'post')),
+            'limit' => count($post_ids),
+            'only_missing' => false,
+            'scan_all' => false,
+            'fonts_only' => true,
+            'dry_run' => false,
+            'issue_filter' => 'all',
+            'post_ids' => $post_ids,
+            'force_queue' => true,
+        ));
+        update_option('kaco_last_audit_summary', $summary, false);
+
+        $message = "Queued {$summary['queued']} refresh suggestion(s) from " . count($post_ids) . ' submitted URL(s).';
+        if (!empty($unmatched)) {
+            $message .= ' ' . count($unmatched) . ' URL(s) did not match existing posts.';
+        }
+        $this->redirect_with_notice($message, 'refresh');
+    }
+
     public function handle_automation_event() {
         if (get_option('kaco_automation_enabled', '0') !== '1') {
             return;
@@ -318,6 +369,8 @@ trait KACO_Actions_Trait {
         $fonts_only = !empty($args['fonts_only']);
         $dry_run = !empty($args['dry_run']);
         $issue_filter = sanitize_key((string) ($args['issue_filter'] ?? 'all'));
+        $forced_post_ids = array_values(array_unique(array_map('intval', (array) ($args['post_ids'] ?? array()))));
+        $force_queue = !empty($args['force_queue']);
 
         $stale_months = (int) get_option('kaco_stale_months', 18);
         $min_internal_links = (int) get_option('kaco_min_internal_links', 4);
@@ -325,16 +378,19 @@ trait KACO_Actions_Trait {
         $category_desc_min_chars = (int) get_option('kaco_category_desc_min_chars', 120);
         $template = (string) get_option('kaco_update_template', '');
 
-        $query = new WP_Query(array(
-            'post_type' => $post_type,
-            'post_status' => array('publish', 'draft'),
-            'posts_per_page' => $scan_all ? -1 : $limit,
-            'orderby' => 'modified',
-            'order' => 'ASC',
-            'fields' => 'ids',
-        ));
-
-        $post_ids = array_map('intval', (array) $query->posts);
+        if (!empty($forced_post_ids)) {
+            $post_ids = $forced_post_ids;
+        } else {
+            $query = new WP_Query(array(
+                'post_type' => $post_type,
+                'post_status' => array('publish', 'draft'),
+                'posts_per_page' => $scan_all ? -1 : $limit,
+                'orderby' => 'modified',
+                'order' => 'ASC',
+                'fields' => 'ids',
+            ));
+            $post_ids = array_map('intval', (array) $query->posts);
+        }
         if ($fonts_only) {
             $post_ids = array_values(array_filter($post_ids, array($this, 'is_fonts_post')));
         }
@@ -353,8 +409,15 @@ trait KACO_Actions_Trait {
             if (!$this->audit_matches_issue_filter($audit, $issue_filter, $min_internal_links)) {
                 continue;
             }
-            if (!$audit['needs_update']) {
+            if (!$audit['needs_update'] && !$force_queue) {
                 continue;
+            }
+            if ($force_queue && !$audit['needs_update']) {
+                $audit['needs_update'] = true;
+                $audit['priority_score'] = max(50, (int) ($audit['priority_score'] ?? 0));
+                $reason_badges = !empty($audit['reason_badges']) && is_array($audit['reason_badges']) ? (array) $audit['reason_badges'] : array();
+                array_unshift($reason_badges, 'manual refresh');
+                $audit['reason_badges'] = array_values(array_unique($reason_badges));
             }
             $matched++;
 
@@ -424,9 +487,56 @@ trait KACO_Actions_Trait {
             'queued_ids' => $queued_ids,
             'dry_run' => $dry_run,
             'issue_filter' => $issue_filter,
+            'forced_queue' => $force_queue,
             'reason_totals' => $reason_totals,
             'top_rows' => array_slice($top_rows, 0, 8),
         );
+    }
+
+    private function normalize_refresh_candidate_urls($raw_urls) {
+        $lines = preg_split('/\r\n|\r|\n/', (string) $raw_urls);
+        $urls = array();
+        foreach ((array) $lines as $line) {
+            $url = esc_url_raw(trim((string) $line));
+            if ($url !== '') {
+                $urls[] = $url;
+            }
+        }
+        return array_slice(array_values(array_unique($urls)), 0, 10);
+    }
+
+    private function resolve_refresh_post_id_from_url($url) {
+        $url = esc_url_raw((string) $url);
+        if ($url === '') {
+            return 0;
+        }
+
+        $post_id = url_to_postid($url);
+        if ($post_id > 0) {
+            return (int) $post_id;
+        }
+
+        $normalized = trailingslashit((string) wp_parse_url($url, PHP_URL_PATH));
+        if ($normalized === '/') {
+            return 0;
+        }
+
+        $site_path = trailingslashit((string) wp_parse_url(home_url('/'), PHP_URL_PATH));
+        if ($site_path !== '/' && strpos($normalized, $site_path) === 0) {
+            $normalized = '/' . ltrim(substr($normalized, strlen($site_path)), '/');
+        }
+
+        $slug = trim($normalized, '/');
+        if ($slug === '') {
+            return 0;
+        }
+
+        $post = get_page_by_path($slug, OBJECT, $this->automation_post_type());
+        if ($post instanceof WP_Post) {
+            return (int) $post->ID;
+        }
+
+        return 0;
     }
 
     private function audit_matches_issue_filter($audit, $issue_filter, $min_internal_links) {
