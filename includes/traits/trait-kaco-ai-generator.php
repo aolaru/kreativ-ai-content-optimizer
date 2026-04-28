@@ -352,6 +352,21 @@ trait KACO_AI_Generator_Trait {
     private function request_generator_queue_preview($url) {
         $source_result = $this->fetch_source_context($url);
         if (is_wp_error($source_result)) {
+            $debug = $this->extract_error_debug($source_result);
+            if ($this->should_fallback_blocked_marketplace_preview($url, $debug)) {
+                $source_context = $this->build_blocked_marketplace_source_context($url, $debug);
+                $review_item = $this->build_generator_review_item_from_source(
+                    $url,
+                    $source_context,
+                    'Marketplace blocked automated fetch. Review the inferred metadata and complete content manually if needed.',
+                    array_merge($debug, array(
+                        'fallback_mode' => 'blocked_marketplace_review',
+                        'source_context' => $source_context,
+                    ))
+                );
+                $review_item['automation_note'] = 'Marketplace blocked automated fetch. Added to review with URL-based metadata.';
+                return $review_item;
+            }
             return $source_result;
         }
         $source_context = is_array($source_result) ? $source_result : array();
@@ -403,6 +418,49 @@ trait KACO_AI_Generator_Trait {
         $debug['retry_model'] = $retry_model;
         $retried->add_data($debug);
         return $retried;
+    }
+
+    private function should_fallback_blocked_marketplace_preview($url, $debug = array()) {
+        if (!is_array($debug)) {
+            return false;
+        }
+
+        $marketplace = $this->detect_marketplace_name($url);
+        if (!in_array($marketplace, array('Creative Market', 'Creative Fabrica'), true)) {
+            return false;
+        }
+
+        $http_code = (int) ($debug['http_code'] ?? 0);
+        $body_length = (int) ($debug['body_length'] ?? 0);
+        $stage = (string) ($debug['stage'] ?? '');
+
+        return $stage === 'source_fetch' && in_array($http_code, array(401, 403, 429), true) && $body_length > 0;
+    }
+
+    private function build_blocked_marketplace_source_context($url, $debug = array()) {
+        $marketplace = $this->detect_marketplace_name($url);
+        $parsed = $this->extract_marketplace_source_fields($url, array());
+        $font_name = sanitize_text_field((string) ($parsed['font_name'] ?? ''));
+        $foundry_name = sanitize_text_field((string) ($parsed['foundry_name'] ?? ''));
+        $title = trim(implode(' by ', array_filter(array($font_name, $foundry_name))));
+        if ($title === '') {
+            $title = $font_name !== '' ? $font_name : $marketplace;
+        }
+
+        return array(
+            'title' => $title,
+            'og_title' => $title,
+            'description' => trim($marketplace . ' blocked automated source fetch. Metadata was inferred from the product URL.'),
+            'text_excerpt' => trim(implode('. ', array_filter(array(
+                $font_name !== '' ? 'Font: ' . $font_name : '',
+                $foundry_name !== '' ? 'Seller: ' . $foundry_name : '',
+                !empty($parsed['designer_names']) ? 'Designers: ' . implode(', ', (array) $parsed['designer_names']) : '',
+            )))),
+            'image_url' => '',
+            'http_code' => (int) ($debug['http_code'] ?? 0),
+            'degraded_fetch' => true,
+            'fetch_blocked' => true,
+        );
     }
 
     private function is_retryable_generator_preview_error($error) {
@@ -1769,6 +1827,12 @@ trait KACO_AI_Generator_Trait {
             (string) ($source_context['text_excerpt'] ?? ''),
         ))));
         if ($text !== '') {
+            if ($fields['font_name'] !== '' && preg_match('/' . preg_quote($fields['font_name'], '/') . '\s+([A-Z][A-Za-z0-9 .,&\'\/+-]+?)\s+Save\b/u', $text, $matches)) {
+                $seller = trim((string) $matches[1]);
+                if ($seller !== '' && stripos($seller, 'creative market') === false) {
+                    $fields['foundry_name'] = $seller;
+                }
+            }
             if (preg_match('/by\s+([A-Z][A-Za-z0-9 .,&-]+?)(?:\s+on\s+Creative Market|\.|,|\||$)/', $text, $matches)) {
                 $fields['foundry_name'] = trim((string) $matches[1]);
             }
@@ -1790,6 +1854,19 @@ trait KACO_AI_Generator_Trait {
             }
         }
 
+        if ($fields['foundry_name'] !== '') {
+            $collaborators = $this->expand_marketplace_collaborators($fields['foundry_name']);
+            if (!empty($collaborators)) {
+                if (empty($fields['designer_names'])) {
+                    $fields['designer_names'] = $collaborators;
+                    $fields['designer_evidence'] = 'Marketplace seller matched the source page byline.';
+                }
+                if (count($collaborators) === 1) {
+                    $fields['foundry_name'] = (string) $collaborators[0];
+                }
+            }
+        }
+
         if (empty($fields['designer_names']) && $fields['foundry_name'] !== '') {
             $fields['designer_names'] = array($fields['foundry_name']);
             $fields['designer_evidence'] = 'Marketplace seller matched the source page byline.';
@@ -1802,6 +1879,24 @@ trait KACO_AI_Generator_Trait {
         }, (array) $fields['designer_names'])));
 
         return $fields;
+    }
+
+    private function expand_marketplace_collaborators($value) {
+        $value = trim((string) $value);
+        if ($value === '') {
+            return array();
+        }
+
+        $normalized = preg_replace('/\s+(?:x|×|and|&|\+|\/)\s+/iu', ',', $value);
+        $parts = $this->sanitize_name_list($normalized);
+        if (count($parts) <= 1) {
+            return $parts;
+        }
+
+        return array_values(array_filter($parts, function($part) {
+            $part = trim((string) $part);
+            return $part !== '' && stripos($part, 'creative market') === false;
+        }));
     }
 
     private function extract_youworkforthem_source_fields($url, $source_context) {
