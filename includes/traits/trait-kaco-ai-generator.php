@@ -1053,8 +1053,6 @@ trait KACO_AI_Generator_Trait {
             $parts[] = '<p style="background:#f7f7f7;padding:12px;border-left:4px solid #FF3366;font-size:14px;line-height:1.6"><strong>Important Notice</strong><br> ' . esc_html($font_name) . ' is a <strong>premium commercial font</strong> and is <strong>not available for free download</strong> on Kreativ Font. To use it legally in personal or commercial projects, purchase it from an official marketplace.</p>';
         }
 
-        $parts[] = '<p style="background:#f7f7f7;padding:12px;border-left:4px solid #00C2FF;font-size:14px;line-height:1.6;margin-top:10px">Looking for <strong>free fonts instead</strong>? Kreativ Font curates <strong>legitimately free fonts</strong> and selected free alternatives with proper licenses.<br><a href="https://kreativfont.com/free">Discover free fonts &amp; alternatives</a> OR <a href="https://www.patreon.com/cw/kreativfont" style="font-size:14px">join the Kreativ Font Free Tier</a></p>';
-
         if ($url !== '' && $font_name !== '') {
             $parts[] = $this->build_generated_intro_paragraph(
                 $url,
